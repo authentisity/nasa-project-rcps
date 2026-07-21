@@ -27,7 +27,7 @@ docs/site/
 # environment.
 Manifest.toml
 
-!data-collection/Manifest.toml
+!data/collection/Manifest.toml
 
 ### Python ###
 # Byte-compiled / optimized / DLL files
