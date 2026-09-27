@@ -170,6 +170,14 @@ planform area. Scores are on the 48 held-out test designs, in physical units:
 Settings: full-batch AdamW with cosine decay, 5000 epochs, lr 3e-3, float64.
 The checkpoint with the lowest validation loss is kept.
 
+The result holds across seeds and degrees:
+
+- **Degree 8, 3 seeds:** CL R² 0.99966–0.99983, CD R² 0.99972–0.99987.
+- **Degree 4:** CL R² 0.99967, CD R² 0.99950.
+- **Degree 12:** CL R² 0.99986, CD R² 0.99977.
+
+Every variant beats both baselines.
+
 **Bern-IBP.** Over 256 random sub-boxes × 1000 samples, no sampled output
 fell outside its bounds. The bounds are tight on small boxes but loose on the
 whole design box:
