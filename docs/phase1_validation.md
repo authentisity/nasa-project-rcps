@@ -163,8 +163,25 @@ itself. The spread widens with twist because the θ_eff model is crude.
 The experiment is ARC R&M 2882, the same case as FLOWUnsteady's own
 validation: A = 5, untapered, 45° sweep, RAE 101 section.
 
-*Pending: the high-fidelity result at AOA = 4.2° (experiment CL = 0.238) is
-being computed.*
+High-fidelity preset at AOA = 4.2°, V = 49.7 m/s, ρ = 0.93 kg/m³, RAE 101
+polar, no skin friction (as in FLOWUnsteady's example), 200 steps:
+
+| quantity | VPM (high) | experiment | error |
+|----------|------------|------------|-------|
+| CL       | 0.2325     | 0.238      | −2.3% |
+| CD       | 0.00478    | 0.005      | −4.4% |
+| Cm (MAC c/4, nose-up +) | +0.018 | n/a | |
+
+The transient is converged: over the last 10% of the steps, the CL standard
+deviation is below 1e-4 and CL drifts by 1e-4 from the preceding 10%. If the
+run stops when the wake is 2.0 spans long instead of 2.75, CL is 0.2320
+(−0.2%).
+
+Cm has no experimental check here. FLOWUnsteady's example reports the moment
+about the root quarter chord and plots no measurements. A Cm of +0.018 puts the
+centre of pressure 0.076 MAC ahead of the MAC quarter chord. That lies between
+a uniform span loading (0) and an elliptic one (about 0.19 MAC ahead) on this
+45° wing, so it is plausible.
 
 ### Convergence of the transients
 
@@ -217,7 +234,10 @@ bound) to get useful bounds.
   on average, against 0.78 for AOA. `magVinf` could be dropped as an input,
   or the polar made Reynolds-dependent (only a few discrete polars are
   available).
-- **High-fidelity cost.** *Pending the benchmark.*
+- **High-fidelity cost.** The Weber run (tr = 1, about 0.92 M static
+  particles, up to 0.21 M wake particles) took 2 h 01 min on 16 threads, about
+  36 s per step. Tapered wings carry up to 1.9× the static particles, so a
+  500-sample sweep would take roughly two months on one machine.
 - **No stall.** CL comes from the lattice, so it stays linear up to 12°. The
   polar only adds parasitic drag.
 - **Legacy low-fidelity data has no valid Cm.** Cm is only available from the
