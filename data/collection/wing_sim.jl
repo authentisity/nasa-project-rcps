@@ -1,0 +1,173 @@
+# Isolated-wing FLOWUnsteady simulation shared by the sweep and validation
+# scripts. `run_wing` returns the per-step CL, CD and Cm transient.
+#
+# Fidelity presets:
+#   "high"  Settings of the high-fidelity preset in FLOWUnsteady's PROWIM
+#           example (Alvarez & Ning 2023, AIAA J.): actuator surface model
+#           (vortex sheet), dynamic SFS LES model, RK3, 5 sheds per step,
+#           lambda = 2.125, 100 elements per semi-span (loads converged to <1%
+#           for n >= 100, Alvarez 2022 dissertation, wing convergence study).
+#   "low"   Settings of FLOWUnsteady's Weber & Brebner wing example (actuator
+#           line model, no SFS model). Only meant for smoke tests.
+#
+# Reference quantities: CL and CD are normalized by the projected planform area
+# S = b (c_root + c_tip) / 2, and Cm by S times the mean aerodynamic chord about
+# the quarter chord of the MAC (nose-up positive).
+
+import FLOWUnsteady as uns
+import FLOWUnsteady: vlm, vpm
+
+# FLOWUnsteady 3.4 still passes `index` to add_particle when it builds the ASM
+# vortex sheet of a wing, a keyword FLOWVPM 4 removed (the rotor path already
+# dropped it). The index is only read by the "averaged"/"weighted" KJ force
+# types, not the "regular" one used here, so discard it and forward the call.
+function vpm.add_particle(pfield::vpm.ParticleField, X::AbstractVector,
+                          Gamma::AbstractVector, sigma::Real; index=nothing, optargs...)
+    return invoke(vpm.add_particle, Tuple{vpm.ParticleField, Any, Any, Any},
+                  pfield, X, Gamma, sigma; optargs...)
+end
+
+"""
+Planform quantities of `vlm.simpleWing(b, ar, tr, twist, lambda, gamma)`,
+which places the root leading edge at the origin, sets c_tip = b/ar and
+c_root = c_tip/tr, and sweeps (dihedrals) the leading edge by lambda (gamma).
+"""
+function planform(b, ar, tr, lambda, gamma)
+    c_tip  = b / ar
+    c_root = c_tip / tr
+    S      = b * (c_root + c_tip) / 2
+    mac    = 2/3 * c_root * (1 + tr + tr^2) / (1 + tr)
+    y_mac  = b/6 * (1 + 2*tr) / (1 + tr)
+    Xref   = [y_mac * tand(lambda) + mac/4, 0.0, y_mac * tand(gamma)]
+    return (; c_tip, c_root, S, mac, Xref)
+end
+
+function fidelity_settings(fidelity, AOA)
+    if fidelity == "high"
+        return (n = 100, p_per_step = 5, lambda_vpm = 2.125, sigma_vlm_surf_b = 1/200,
+                vlm_rlx = 0.3, shed_starting = AOA < 8, unsteady_shedcrit = 0.001,
+                vortexsheet = true,
+                vpm_SFS = vpm.DynamicSFS(vpm.Estr_fmm, vpm.pseudo3level_positive;
+                                         alpha=0.999, maxC=1.0,
+                                         clippings=[vpm.clipping_backscatter]))
+    elseif fidelity == "low"
+        return (n = 50, p_per_step = 1, lambda_vpm = 2.0, sigma_vlm_surf_b = 0.05,
+                vlm_rlx = 0.7, shed_starting = true, unsteady_shedcrit = 0.01,
+                vortexsheet = false, vpm_SFS = vpm.SFS_none)
+    else
+        error("Unknown fidelity \"$fidelity\"; expected \"high\" or \"low\"")
+    end
+end
+
+"""
+    run_wing(; AOA, ar, tr, lambda, gamma, twist_tip, magVinf, ...)
+
+Simulate an isolated simpleWing from rest until its wake is `wake_factor` spans
+long. Returns `(; t, CL, CD, Cm, planform)` where the arrays hold one value per
+time step (steps 3..nsteps, as logged by FLOWUnsteady's wing monitor).
+"""
+function run_wing(; AOA, ar, tr, lambda, gamma, twist_tip, magVinf,
+                    b = 2.489, rho = 1.225, twist_root = 0.0,
+                    fidelity = "high", nsteps = 200, wake_factor = 2.75,
+                    r_expansion = 10.0,
+                    airfoil_polar = "xf-n0012-il-500000-n5.csv",
+                    add_skinfriction = true, thickness = 0.12, v_lvl = 1,
+                    verbose_nsteps = nsteps)
+
+    fs = fidelity_settings(fidelity, AOA)
+    pf = planform(b, ar, tr, lambda, gamma)
+    qinf = 0.5 * rho * magVinf^2
+
+    Vinf(X, t) = magVinf * [cosd(AOA), 0.0, sind(AOA)]
+
+    wing = vlm.simpleWing(b, ar, tr, twist_root, lambda, gamma;
+                          twist_tip=twist_tip, n=fs.n, r=r_expansion, central=false)
+    system = vlm.WingSystem()
+    vlm.addwing(system, "Wing", wing)
+    vehicle = uns.VLMVehicle(system; vlm_system=system, wake_system=system)
+
+    Vvehicle(t)     = zeros(3)
+    anglevehicle(t) = zeros(3)
+    maneuver = uns.KinematicManeuver((), (), Vvehicle, anglevehicle)
+
+    ttot = wake_factor * b / magVinf
+    dt   = ttot / nsteps
+    simulation = uns.Simulation(vehicle, maneuver, 0.0, 0.0, ttot;
+                                Vinit=zeros(3), Winit=zeros(3))
+
+    max_particles = (nsteps + 1) * (vlm.get_m(system) * (fs.p_per_step + 1) + fs.p_per_step)
+    max_static_particles = fs.vortexsheet ? 10^6 : nothing
+    fs.vortexsheet && (max_particles += max_static_particles)
+
+    sigma_vpm_overwrite = fs.lambda_vpm * magVinf * dt / fs.p_per_step
+    sigma_vlm_surf      = fs.sigma_vlm_surf_b * b
+    sigma_tbv           = fs.vortexsheet ? thickness * pf.c_tip / 128 : nothing
+
+    # Kutta-Joukowski force at the midpoint of each lifting bound vortex plus
+    # parasitic drag from the airfoil polar (the vortex sheet only changes the
+    # VLM-on-VPM coupling, not this force, with the "regular" KJ force type)
+    calc_aerodynamicforce_fun = uns.generate_calc_aerodynamicforce(;
+                                    add_parasiticdrag=true,
+                                    add_skinfriction=add_skinfriction,
+                                    airfoilpolar=airfoil_polar)
+
+    Dhat = [cosd(AOA), 0.0, sind(AOA)]
+    Shat = [0.0, 1.0, 0.0]
+    Lhat = uns.cross(Dhat, Shat)
+
+    # The monitor normalizes by qinf*b^2/ar_ref, so ar_ref = b^2/S gives
+    # planform-area coefficients
+    cl_out, cd_out = Float64[], Float64[]
+    wing_monitor = uns.generate_monitor_wing(wing, Vinf, b, b^2 / pf.S,
+                                             rho, qinf, nsteps;
+                                             calc_aerodynamicforce_fun=calc_aerodynamicforce_fun,
+                                             L_dir=Lhat, D_dir=Dhat,
+                                             out_CLwing=cl_out, out_CDwing=cd_out,
+                                             save_path=nothing, disp_plot=false)
+
+    t_hist, cm_hist = Float64[], Float64[]
+
+    # The wing monitor stores each element's force in wing.sol["Ftot"]; the
+    # force acts at the midpoint of the element's lifting bound vortex A-B
+    function monitor(sim, PFIELD, T, DT; optargs...)
+        ret = wing_monitor(sim, PFIELD, T, DT; optargs...)
+        if PFIELD.nt > 2
+            M = zeros(3)
+            for (i, F) in enumerate(wing.sol["Ftot"])
+                HS = vlm.getHorseshoe(wing, i)
+                X  = (HS[2] + HS[3]) / 2
+                M .+= uns.cross(X - pf.Xref, F)
+            end
+            push!(t_hist, PFIELD.t)
+            push!(cm_hist, uns.dot(M, Shat) / (qinf * pf.S * pf.mac))
+        end
+        return ret
+    end
+
+    uns.run_simulation(simulation, nsteps;
+                       Vinf=Vinf,
+                       rho=rho,
+                       p_per_step=fs.p_per_step,
+                       max_particles=max_particles,
+                       max_static_particles=max_static_particles,
+                       vpm_integration=vpm.rungekutta3,
+                       vpm_SFS=fs.vpm_SFS,
+                       sigma_vlm_solver=-1,
+                       sigma_vlm_surf=sigma_vlm_surf,
+                       sigma_rotor_surf=sigma_vlm_surf,
+                       sigma_vpm_overwrite=sigma_vpm_overwrite,
+                       vlm_vortexsheet=fs.vortexsheet,
+                       vlm_vortexsheet_overlap=2.125,
+                       vlm_vortexsheet_distribution=uns.g_pressure,
+                       vlm_vortexsheet_sigma_tbv=sigma_tbv,
+                       vlm_rlx=fs.vlm_rlx,
+                       shed_unsteady=true,
+                       shed_starting=fs.shed_starting,
+                       unsteady_shedcrit=fs.unsteady_shedcrit,
+                       extra_runtime_function=monitor,
+                       save_path=nothing,
+                       v_lvl=v_lvl,
+                       verbose_nsteps=verbose_nsteps)
+
+    return (; t=t_hist, CL=copy(cl_out), CD=copy(cd_out), Cm=cm_hist, planform=pf)
+end

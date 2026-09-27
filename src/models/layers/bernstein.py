@@ -65,42 +65,31 @@ class BernsteinLayer(nn.Module):
         )
         alpha = bounds[..., 0].unsqueeze(-1)
         beta = bounds[..., 1].unsqueeze(-1)
-        zero_to_beta_coeffs = torch.zeros(
-            bounds.shape[0],
-            *self.in_shape,
-            self.degree + 1,
-            self.degree + 2,
-            device=alpha.device,
-        )  # Pad with an extra row and col
-        zero_to_beta_coeffs[..., 0, :-1] = self.bern_coeffs
-        # temp = self.bern_coeffs
-        for i in range(1, zero_to_beta_coeffs.shape[-2]):
-            zero_to_beta_coeffs[..., i, 1:] = (1 - beta) * zero_to_beta_coeffs[
-                ..., i - 1, :-1
-            ].clone() + beta * zero_to_beta_coeffs[..., i - 1, 1:].clone()
+        coeffs = self.bern_coeffs.expand(bounds.shape[0], *self.bern_coeffs.shape)
 
-        zero_to_beta_coeffs = zero_to_beta_coeffs[..., :-1].diagonal(dim1=-2, dim2=-1)
+        # Two applications of the subdivision property (DeepBern-Nets, Prop. 2).
+        # Splitting at beta then alpha/beta divides by zero when beta == 0, and
+        # splitting at alpha then (beta-alpha)/(1-alpha) when alpha == 1, so take
+        # whichever order has the larger denominator (always >= 1/2 here).
+        left_first = beta >= 1 - alpha
+        one = torch.ones_like(alpha)
+        beta_safe = torch.where(left_first, beta, one)
+        one_minus_alpha_safe = torch.where(left_first, one, 1 - alpha)
 
-        gamma = alpha / beta
-        alpha_to_beta_coeffs = torch.zeros(
-            bounds.shape[0],
-            *self.in_shape,
-            self.degree + 1,
-            self.degree + 2,
-            device=alpha.device,
-        )  # Pad with an extra row and col
-        alpha_to_beta_coeffs[..., 0, :-1] = zero_to_beta_coeffs
-        for i in range(1, alpha_to_beta_coeffs.shape[-2]):
-            alpha_to_beta_coeffs[..., i, 1:] = (1 - gamma) * alpha_to_beta_coeffs[
-                ..., i - 1, :-1
-            ].clone() + gamma * alpha_to_beta_coeffs[..., i - 1, 1:].clone()
+        zero_to_beta, _ = _de_casteljau_split(coeffs, beta_safe)
+        _, via_left = _de_casteljau_split(zero_to_beta, alpha / beta_safe)
+        _, alpha_to_one = _de_casteljau_split(coeffs, alpha)
+        via_right, _ = _de_casteljau_split(alpha_to_one, (beta - alpha) / one_minus_alpha_safe)
 
-        new_coeffs_lb_ub = alpha_to_beta_coeffs[..., -2]
+        new_coeffs_lb_ub = torch.where(left_first, via_left, via_right)
         lb = new_coeffs_lb_ub.min(axis=-1, keepdim=True)[0]
         ub = new_coeffs_lb_ub.max(axis=-1, keepdim=True)[0]
         return torch.concat((lb, ub), -1)
 
     def binom(self, n, k):
+        # Integer inputs would be promoted to float32, whose lgamma is off by
+        # ~1e-6 relative for degree ~40; in float64 nCk is exact to degree ~50
+        n, k = n.double(), k.double()
         nCk = torch.lgamma(n + 1) - torch.lgamma(k + 1) - torch.lgamma(n - k + 1)
         nCk = torch.exp(nCk)
         nCk = torch.floor(nCk + 0.5)
@@ -109,7 +98,7 @@ class BernsteinLayer(nn.Module):
     def bern_basis(self, x):
         y = x.unsqueeze(-1)
         basis = (
-            self.nCk
+            self.nCk.to(y.dtype)
             * (y) ** self._basis_indices
             * (1 - y) ** (self._deg_tensor - self._basis_indices)
         )
@@ -124,7 +113,7 @@ class BernsteinLayer(nn.Module):
         with torch.no_grad():
             basis_shape = torch.tensor(basis.shape)
             basis_sum_to_one = torch.isclose(
-                torch.sum(basis, axis=-1).sum(), basis_shape[:-1].prod().float()
+                torch.sum(basis, axis=-1).sum(), basis_shape[:-1].prod().to(basis.dtype)
             )
             if not basis_sum_to_one:
                 raise Exception(
@@ -133,3 +122,15 @@ class BernsteinLayer(nn.Module):
         out = basis * self.bern_coeffs
         out = out.sum(axis=-1)
         return out
+
+
+def _de_casteljau_split(coeffs, t):
+    """Split Bernstein coefficients (..., n+1) on [0,1] at t (..., 1) into the
+    coefficients of the same polynomial on [0,t] and on [t,1]."""
+    left, right = [coeffs[..., 0]], [coeffs[..., -1]]
+    c = coeffs
+    for _ in range(coeffs.shape[-1] - 1):
+        c = (1 - t) * c[..., :-1] + t * c[..., 1:]
+        left.append(c[..., 0])
+        right.append(c[..., -1])
+    return torch.stack(left, -1), torch.stack(right[::-1], -1)
