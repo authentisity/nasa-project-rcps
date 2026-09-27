@@ -31,6 +31,16 @@ python src/datasets/preprocess.py --input data/raw/wing_timeseries_data*.csv
 python src/training/train_steady.py                      # -> checkpoints/wing_steady_bern.pt
 python src/training/train_steady.py --arch relu --output checkpoints/wing_steady_relu.pt
 python src/training/train.py                             # WingLSTM on the transients
+# 3b. Multi-fidelity (section 5). The high-fidelity CSV shares sample ids with
+#     the low-fidelity sweep, so keep it out of the data/raw glob of step 2
+python src/datasets/preprocess.py --input <hifi.csv> \
+    --steady-output data/processed/wing_steady_hifi.pt --output data/processed/wing_dataset_hifi.pt
+python src/training/train_steady.py --data data/processed/wing_steady_hifi.pt --targets CL CD \
+    --base checkpoints/wing_steady_bern.pt --output checkpoints/wing_steady_mf.pt
+python src/training/train_steady.py --data data/processed/wing_steady_hifi.pt --targets Cm \
+    --output checkpoints/wing_steady_cm.pt
+python src/inference/eval_steady.py checkpoints/wing_steady_bern.pt checkpoints/wing_steady_mf.pt \
+    checkpoints/wing_steady_cm.pt --data data/processed/wing_steady_hifi.pt
 # 4. Held-out metrics and Bern-IBP soundness
 python src/inference/eval_steady.py checkpoints/wing_steady_bern.pt checkpoints/wing_steady_relu.pt \
     --lstm checkpoints/wing_lstm.pt
@@ -226,7 +236,54 @@ whole design box:
 Phase 2 reachability will therefore need input-space splitting (branch and
 bound) to get useful bounds.
 
-## 5. Limitations
+## 5. Multi-fidelity surrogate
+
+Running all 500 designs at high fidelity would take about 5–6 weeks (section
+6), so the final surrogate combines the two sweeps:
+
+- **CL, CD:** the low-fidelity BernMLP (500 designs) plus a BernMLP
+  correction trained on the high-fidelity residual y − base(x)
+  (`train_steady.py --base`). Both networks are defined on the same input
+  box, so the Bern-IBP bounds of their sum are the sum of their bounds
+  (`tests/test_train_steady.py`).
+- **Cm:** a separate BernMLP trained on the high-fidelity data only
+  (`--targets Cm`), since the low-fidelity data has no valid Cm.
+
+The high-fidelity sweep uses the same LHS (seed 42) as the low-fidelity one,
+so each high-fidelity sample is paired with the low-fidelity sample of the
+same `sample_id`. The split is drawn per `sample_id`, so a high-fidelity test
+design is also held out of the base model's training data. The sweep runs the
+samples in random LHS order, so any prefix is a uniform subset of the design
+box.
+
+**First pairs** (steady values, planform reference area):
+
+| id | design (AOA, ar, tr, Λ, twist) | CL hi | CL lo | ΔCL | CD hi | CD lo | ΔCD | Cm hi |
+|----|------|-------|-------|-----|-------|-------|-----|-------|
+| 1 | 5.6°, 8.0, 0.64, 23°, −2.8° | 0.3410 | 0.3433 | −0.7% | 0.01435 | 0.01429 | +0.4% | +0.0181 |
+| 2 | 1.2°, 7.2, 0.98, 3°, +2.7° | 0.1811 | 0.1836 | −1.4% | 0.00968 | 0.00969 | −0.1% | +0.0000 |
+
+**Synthetic check of the training setup.** To exercise the pipeline before
+enough high-fidelity data exists, a stand-in was built from the first 100
+low-fidelity designs, with the low-fidelity values distorted by a smooth,
+design-dependent correction (a few % in CL and CD) and a made-up smooth Cm.
+The split was 83 train, 9 val and 8 test designs. Test-split scores:
+
+| model                                  | CL R²   | CL MAE | CD R²   | CD MAE | Cm R²  |
+|----------------------------------------|---------|--------|---------|--------|--------|
+| low-fidelity BernMLP only              | 0.99877 | 6.9e-3 | 0.99836 | 5.3e-4 | –      |
+| high-fidelity only (64, 64), d8        | 0.99795 | 1.0e-2 | 0.99736 | 5.3e-4 | 0.9952 |
+| base + correction (16, 16), d4         | 0.99993 | 1.6e-3 | 0.99989 | 1.2e-4 | –      |
+| Cm only, high fidelity (16, 16), d4    | –       | –      | –       | –      | 0.9915 |
+
+The correction cuts the CL/CD error 3–8× compared with either single-fidelity
+model. Learning Cm inside the correction network was also tried. It was worse
+on the validation designs (Cm R² 0.93 against 0.98–0.99). Early stopping on
+the small, quickly fit CL/CD correction stops training before Cm is fit, so
+Cm gets its own model. The real comparison on high-fidelity test designs is
+pending until enough samples exist.
+
+## 6. Limitations
 
 - **The parasitic drag polar is fixed.** It is NACA 0012 at Re = 5e5. The VPM
   is inviscid, so the coefficients are almost independent of `magVinf`. In the
@@ -236,13 +293,14 @@ bound) to get useful bounds.
   available).
 - **High-fidelity cost.** The Weber run (tr = 1, about 0.92 M static
   particles, up to 0.21 M wake particles) took 2 h 01 min on 16 threads, about
-  36 s per step. Tapered wings carry up to 1.9× the static particles, so a
-  500-sample sweep would take roughly two months on one machine. Most of the
-  cost is the static particles. Rerunning the Weber case with only the
+  36 s per step. The first two sweep samples (tr = 0.64 and 0.98) took 1 h
+  45 min and 1 h 37 min. At about 13 samples a day, 500 would take 5–6 weeks
+  on one machine; tapered wings, with up to 1.9× the static particles, are
+  slower. Most of the cost is the static particles. Rerunning the Weber case with only the
   vortex-sheet overlap reduced to 2.125/10 (PROWIM's mid-fidelity value, so
   10× fewer static particles) took 34 min, 3.5× faster. CL was 0.2323 against
   0.2325, CD and Cm were unchanged, and CL differed by at most 4e-4 over the
-  whole transient. Only this rectangular wing has been compared.
+  whole transient. Only this untapered wing has been compared.
 - **No stall.** CL comes from the lattice, so it stays linear up to 12°. The
   polar only adds parasitic drag.
 - **Legacy low-fidelity data has no valid Cm.** Cm is only available from the

@@ -2,14 +2,16 @@
 Score steady-state surrogates on the held-out designs of wing_steady.pt:
 R^2, MAE and max |error| of each target, in physical units.
 
-Checkpoints from src/training/train_steady.py are evaluated directly. A
-WingLSTM checkpoint (src/training/train.py) is scored as a steady model by
-averaging its predicted transient over the same tail window preprocess.py
-used for the steady targets.
+Checkpoints from src/training/train_steady.py are evaluated directly, on the
+targets they predict (e.g. a low-fidelity CL/CD model scored on high-fidelity
+CL/CD/Cm data, the baseline of a --base corrected model). A WingLSTM
+checkpoint (src/training/train.py) is scored as a steady model by averaging
+its predicted transient over the same tail window preprocess.py used for the
+steady targets.
 
-For a BernMLP checkpoint, the Bern-IBP output bounds are also checked for
-soundness: on random sub-boxes of the design box, every sampled prediction
-must lie inside the bounds.
+For a BernMLP (or corrected BernMLP) checkpoint, the Bern-IBP output bounds
+are also checked for soundness: on random sub-boxes of the design box, every
+sampled prediction must lie inside the bounds.
 
 Usage:
     python src/inference/eval_steady.py checkpoints/wing_steady_bern.pt checkpoints/wing_steady_relu.pt \
@@ -29,7 +31,7 @@ sys.path.insert(0, str(REPO_ROOT / "src" / "inference"))
 
 from bern_net import BernMLP  # noqa: E402
 from forward import load_model, predict  # noqa: E402
-from train_steady import load_checkpoint  # noqa: E402
+from train_steady import Corrected, load_checkpoint  # noqa: E402
 
 SPLIT_IDS = {"train": 0, "val": 1, "test": 2}
 
@@ -96,26 +98,29 @@ def main():
     results = {}
     for path in args.checkpoints:
         model, ckpt = load_checkpoint(path)
-        if ckpt["target_columns"] != target_columns or not torch.equal(ckpt["design_box"], data["design_box"]):
-            parser.error(f"{path} was trained on different targets or a different design box")
+        if not set(ckpt["target_columns"]) <= set(target_columns) \
+                or not torch.equal(ckpt["design_box"], data["design_box"]):
+            parser.error(f"{path} predicts targets not in the data or has a different design box")
+        cols = [target_columns.index(c) for c in ckpt["target_columns"]]
         with torch.no_grad():
-            results[path.name] = model(x) * ckpt["y_std"] + ckpt["y_mean"]
-        if isinstance(model, BernMLP):
+            results[path.name] = (model(x) * ckpt["y_std"] + ckpt["y_mean"], cols)
+        if isinstance(model, (BernMLP, Corrected)):
             n_out, full, sub = check_bounds(model, args.n_boxes, args.n_samples, args.seed)
             print(f"{path.name}: Bern-IBP on {args.n_boxes} boxes x {args.n_samples} samples:"
                   f" {n_out} outside the bounds")
             for label, width in (("whole design box", full), ("mean over sub-boxes", sub)):
-                rel = width * ckpt["y_std"] / y_range
+                rel = width * ckpt["y_std"] / y_range[cols]
                 print(f"  bound width / data range, {label}: "
-                      + ", ".join(f"{c} {w:.2f}" for c, w in zip(target_columns, rel.tolist())))
+                      + ", ".join(f"{c} {w:.2f}" for c, w in zip(ckpt["target_columns"], rel.tolist())))
     if args.lstm:
-        results[args.lstm.name] = lstm_steady(args.lstm, args.lstm_data, data["sample_id"][mask],
-                                              target_columns, data["tail_frac"])
+        pred = lstm_steady(args.lstm, args.lstm_data, data["sample_id"][mask],
+                           target_columns, data["tail_frac"])
+        results[args.lstm.name] = (pred, list(range(len(target_columns))))
 
     print(f"\n{'model':<28}{'target':>7}{'R2':>10}{'MAE':>12}{'max err':>12}")
-    for name, pred in results.items():
-        m = metrics(pred, y)
-        for j, c in enumerate(target_columns):
+    for name, (pred, cols) in results.items():
+        m = metrics(pred, y[:, cols])
+        for j, c in enumerate(target_columns[i] for i in cols):
             print(f"{name:<28}{c:>7}{m['R2'][j]:10.5f}{m['MAE'][j]:12.2e}{m['max'][j]:12.2e}")
 
 

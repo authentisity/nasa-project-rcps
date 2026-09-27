@@ -6,6 +6,15 @@ src/datasets/preprocess.py).
   --arch bern   DeepBern-Net (BernMLP), the surrogate used for reachability
   --arch relu   ReLU MLP of the same widths, a baseline
 
+  --base CKPT   multi-fidelity: learn the correction y - base(x) on top of a
+                BernMLP trained on a lower-fidelity sweep of the same design
+                box and targets (select them with --targets). The saved
+                checkpoint holds both networks; load_checkpoint returns their
+                sum as one model. A target the low-fidelity sweep lacks (Cm)
+                gets its own model: --targets Cm without --base. Learning it
+                inside the correction network was worse: early stopping on
+                the small CL/CD correction stops before Cm is fit.
+
 Targets are standardized with the training-split statistics. The weights with
 the lowest validation loss are kept; a BernMLP is saved in eval mode, so its
 stored Bernstein input intervals belong to the saved weights.
@@ -13,6 +22,10 @@ stored Bernstein input intervals belong to the saved weights.
 Usage:
     python src/training/train_steady.py
     python src/training/train_steady.py --arch relu --output checkpoints/wing_steady_relu.pt
+    python src/training/train_steady.py --data data/processed/wing_steady_hifi.pt --targets CL CD \
+        --base checkpoints/wing_steady_bern.pt --output checkpoints/wing_steady_mf.pt
+    python src/training/train_steady.py --data data/processed/wing_steady_hifi.pt --targets Cm \
+        --output checkpoints/wing_steady_cm.pt
 """
 
 import argparse
@@ -40,13 +53,47 @@ def build_model(arch, in_dim, out_dim, hidden, degree):
     return nn.Sequential(*layers)
 
 
+class Corrected(nn.Module):
+    """A lower-fidelity base surrogate plus a learned correction, in the
+    standardized units of the correction (prediction = model(x) * y_std +
+    y_mean with the correction checkpoint's statistics). Both are BernMLPs on
+    the same input box, so Bern-IBP bounds of the sum are the sums of their
+    bounds."""
+
+    def __init__(self, base, base_ckpt, correction, ckpt):
+        super().__init__()
+        self.base, self.correction = base, correction
+        self.register_buffer("base_mean", base_ckpt["y_mean"])
+        self.register_buffer("base_std", base_ckpt["y_std"])
+        self.register_buffer("y_std", ckpt["y_std"])
+
+    @property
+    def input_bounds(self):
+        return self.correction.input_bounds
+
+    def forward(self, x):
+        base = self.base(x) * self.base_std + self.base_mean
+        return self.correction(x) + base / self.y_std
+
+    @torch.no_grad()
+    def output_bounds(self, box):
+        base = self.base.output_bounds(box) * self.base_std[:, None] + self.base_mean[:, None]
+        return self.correction.output_bounds(box) + base / self.y_std[:, None]
+
+
 def load_checkpoint(path):
     """-> (model in eval mode, checkpoint dict); model maps unit-box inputs to
     standardized targets (see ckpt["y_mean"], ckpt["y_std"])."""
-    ckpt = torch.load(path, weights_only=False, map_location="cpu")
+    return model_from_checkpoint(torch.load(path, weights_only=False, map_location="cpu"))
+
+
+def model_from_checkpoint(ckpt):
     model = build_model(ckpt["arch"], len(ckpt["input_columns"]), len(ckpt["target_columns"]),
                         ckpt["hidden"], ckpt["degree"]).double()
     model.load_state_dict(ckpt["model_state_dict"])
+    if "base" in ckpt:
+        base, _ = model_from_checkpoint(ckpt["base"])
+        model = Corrected(base, ckpt["base"], model, ckpt)
     return model.eval(), ckpt
 
 
@@ -57,6 +104,8 @@ def main():
     parser.add_argument("--arch", choices=("bern", "relu"), default="bern")
     parser.add_argument("--hidden", type=int, nargs="+", default=[64, 64])
     parser.add_argument("--degree", type=int, default=8, help="Bernstein polynomial degree (bern only)")
+    parser.add_argument("--base", type=Path, help="lower-fidelity BernMLP checkpoint to correct (bern only)")
+    parser.add_argument("--targets", nargs="+", help="fit only these target columns (default: all)")
     parser.add_argument("--epochs", type=int, default=5000)
     parser.add_argument("--lr", type=float, default=3e-3)
     parser.add_argument("--weight-decay", type=float, default=0.0)
@@ -66,7 +115,21 @@ def main():
 
     torch.manual_seed(args.seed)
     data = torch.load(args.data, weights_only=False)
-    x, y, split = data["x"], data["y"], data["split"]
+    x, split = data["x"], data["split"]
+    targets = args.targets or data["target_columns"]
+    if not set(targets) <= set(data["target_columns"]):
+        parser.error(f"--targets must be among {data['target_columns']}")
+    y = data["y"][:, [data["target_columns"].index(c) for c in targets]]
+    base_ckpt = None
+    if args.base:
+        base, base_ckpt = load_checkpoint(args.base)
+        if args.arch != "bern" or base_ckpt["arch"] != "bern":
+            parser.error("--base needs BernMLP base and correction (Bern-IBP of the sum)")
+        if not torch.equal(base_ckpt["design_box"], data["design_box"]) \
+                or base_ckpt["target_columns"] != targets:
+            parser.error(f"{args.base} has a different design box or targets than {targets}")
+        with torch.no_grad():
+            y = y - (base(x) * base_ckpt["y_std"] + base_ckpt["y_mean"])
     x_train, x_val = x[split == 0], x[split == 1]
     y_mean, y_std = y[split == 0].mean(0), y[split == 0].std(0)
     y_train, y_val = (y[split == 0] - y_mean) / y_std, (y[split == 1] - y_mean) / y_std
@@ -102,11 +165,12 @@ def main():
         "hidden": args.hidden,
         "degree": args.degree,
         "input_columns": data["input_columns"],
-        "target_columns": data["target_columns"],
+        "target_columns": targets,
         "design_box": data["design_box"],
         "y_mean": y_mean,
         "y_std": y_std,
         "data": str(args.data),
+        **({"base": base_ckpt} if base_ckpt else {}),
     }, args.output)
     print(f"Best val loss {best['val_loss']:.3e} (standardized MSE) at epoch {best['epoch']} -> {args.output}")
 
