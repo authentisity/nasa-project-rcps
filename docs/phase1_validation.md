@@ -237,7 +237,12 @@ bound) to get useful bounds.
 - **High-fidelity cost.** The Weber run (tr = 1, about 0.92 M static
   particles, up to 0.21 M wake particles) took 2 h 01 min on 16 threads, about
   36 s per step. Tapered wings carry up to 1.9× the static particles, so a
-  500-sample sweep would take roughly two months on one machine.
+  500-sample sweep would take roughly two months on one machine. Most of the
+  cost is the static particles. Rerunning the Weber case with only the
+  vortex-sheet overlap reduced to 2.125/10 (PROWIM's mid-fidelity value, so
+  10× fewer static particles) took 34 min, 3.5× faster. CL was 0.2323 against
+  0.2325, CD and Cm were unchanged, and CL differed by at most 4e-4 over the
+  whole transient. Only this rectangular wing has been compared.
 - **No stall.** CL comes from the lattice, so it stays linear up to 12°. The
   polar only adds parasitic drag.
 - **Legacy low-fidelity data has no valid Cm.** Cm is only available from the
