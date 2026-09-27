@@ -126,6 +126,23 @@ keyword, so every high-fidelity wing run failed with a `MethodError`.
 the "averaged"/"weighted" Kutta–Joukowski force types; this project uses the
 "regular" one.
 
+**Blown-up particle guard.** Sweep sample 3 (tr = 0.30, Λ = 32.8°,
+Γ = 8.3°, AOA = 7.9°, V = 77.9 m/s) crashed after 3 h 15 min inside FLOWVPM's
+FMM. The error was `ArgumentError: not a bracketing interval` from
+`solve_ρ_over_σ`, the regularization-error autotuning. That root solve has a
+residual of −1 at 0, so it can only fail when a particle's strength is
+non-finite or its core size is ≤ 0. rVPM shrinks the core under stretching,
+so this is a blown-up particle. PROWIM's high-fidelity preset runs without
+wake treatment. Its lower-fidelity presets remove particles whose strength
+exceeds 10× that of a CL = 2 bound vortex shed over one substep, and also
+particles weaker than 10⁻⁴ of it. `run_wing` applies the same upper bound
+after every step (with c_root as the chord), together with σ ≤ 0 or NaN. It
+does not apply the lower bound, so a run that does not blow up is unchanged.
+Over the first 8 steps of sample 3's design, starting vortex included,
+nothing was removed and the strongest particle was 0.10 of the bound. Each
+sample's log line reports the number of particles removed and the peak
+strength kept relative to the bound.
+
 **Reference quantities (fixed).**
 
 - **CL and CD** now use the projected planform area S = b(c_root + c_tip)/2.

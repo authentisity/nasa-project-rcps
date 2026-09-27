@@ -63,8 +63,10 @@ end
     run_wing(; AOA, ar, tr, lambda, gamma, twist_tip, magVinf, ...)
 
 Simulate an isolated simpleWing from rest until its wake is `wake_factor` spans
-long. Returns `(; t, CL, CD, Cm, planform)` where the arrays hold one value per
-time step (steps 3..nsteps, as logged by FLOWUnsteady's wing monitor).
+long. Returns `(; t, CL, CD, Cm, planform, n_removed, peak_Gamma)` where the
+arrays hold one value per time step (steps 3..nsteps, as logged by
+FLOWUnsteady's wing monitor), `n_removed` counts blown-up particles removed and
+`peak_Gamma` is the largest kept particle strength over the removal bound.
 """
 function run_wing(; AOA, ar, tr, lambda, gamma, twist_tip, magVinf,
                     b = 2.489, rho = 1.225, twist_root = 0.0,
@@ -137,10 +139,38 @@ function run_wing(; AOA, ar, tr, lambda, gamma, twist_tip, magVinf,
 
     t_hist, cm_hist = Float64[], Float64[]
 
+    # Blown-up particle guard. A particle whose strength diverges (or whose
+    # rVPM core size is driven to <= 0) crashes the next FMM call: FLOWVPM's
+    # regularization autotuning cannot bracket its root. PROWIM's lower
+    # fidelity presets remove particles stronger than 10x a CL = 2 bound vortex
+    # shed over one substep; the same upper bound is applied here, with c_root,
+    # but not their lower bound, so runs that do not blow up are unchanged.
+    # (The strongest particle over the first 8 steps of sweep sample 3,
+    # starting vortex included, is 0.10 of it.) Called after the step, when
+    # only free particles are in the field.
+    Gamma_max = 10 * 2.0 * magVinf * pf.c_root / 2 * magVinf * dt / fs.p_per_step
+    n_removed, peak_Gamma = Ref(0), Ref(0.0)
+    function remove_blownup(PFIELD)
+        n = 0
+        for i in vpm.get_np(PFIELD):-1:1
+            G, sigma = vpm.get_Gamma(PFIELD, i), vpm.get_sigma(PFIELD, i)[]
+            G2 = G[1]^2 + G[2]^2 + G[3]^2
+            if G2 <= Gamma_max^2 && sigma > 0          # false for NaN
+                peak_Gamma[] = max(peak_Gamma[], sqrt(G2))
+            else
+                vpm.remove_particle(PFIELD, i)
+                n += 1
+            end
+        end
+        n > 0 && println("\t\tstep $(PFIELD.nt): removed $n blown-up particles")
+        n_removed[] += n
+    end
+
     # The wing monitor stores each element's force in wing.sol["Ftot"]; the
     # force acts at the midpoint of the element's lifting bound vortex A-B
     function monitor(sim, PFIELD, T, DT; optargs...)
         ret = wing_monitor(sim, PFIELD, T, DT; optargs...)
+        remove_blownup(PFIELD)
         if PFIELD.nt > 2
             M = zeros(3)
             for (i, F) in enumerate(wing.sol["Ftot"])
@@ -179,5 +209,6 @@ function run_wing(; AOA, ar, tr, lambda, gamma, twist_tip, magVinf,
                        v_lvl=v_lvl,
                        verbose_nsteps=verbose_nsteps)
 
-    return (; t=t_hist, CL=copy(cl_out), CD=copy(cd_out), Cm=cm_hist, planform=pf)
+    return (; t=t_hist, CL=copy(cl_out), CD=copy(cd_out), Cm=cm_hist, planform=pf,
+              n_removed=n_removed[], peak_Gamma=peak_Gamma[] / Gamma_max)
 end
