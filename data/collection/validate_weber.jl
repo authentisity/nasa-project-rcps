@@ -39,6 +39,7 @@ for AOA in AOAs
     ex = get(EXP, AOA, (CL=NaN, CD=NaN))
     @printf("\nWeber & Brebner AOA=%.1f (%s, %d steps, %.0f s): CL=%.4f (exp %.3f, %+.1f%%)  CD=%.5f (exp %.3f)  Cm=%.4f\n",
             AOA, fidelity, nsteps, wall, CL, ex.CL, 100*(CL/ex.CL - 1), CD, ex.CD, Cm)
+    flush(stdout)   # stdout redirected to a file is block-buffered
     open(out_file, "a") do f
         println(f, join([fidelity, nsteps, AOA, CL, CD, Cm, ex.CL, ex.CD,
                          CL/ex.CL - 1, CD/ex.CD - 1, wall], ","))

@@ -129,6 +129,7 @@ for idx in my_ids
     @printf("\n[%d/%d] AOA=%5.1f°  ar=%4.1f  tr=%.2f  Λ=%5.1f°  Γ=%5.1f°  twist=%5.1f°  V=%5.1f m/s\n",
             idx, num_samples,
             cfg.AOA, cfg.ar, cfg.tr, cfg.lambda, cfg.gamma, cfg.twist_tip, cfg.magVinf)
+    flush(stdout)   # stdout redirected to a file is block-buffered
 
     pf   = planform(b, cfg.ar, cfg.tr, cfg.lambda, cfg.gamma)
     qinf = 0.5 * rho * cfg.magVinf^2
