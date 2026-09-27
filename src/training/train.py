@@ -13,7 +13,7 @@ from pathlib import Path
 
 import torch
 from torch import optim
-from torch.utils.data import DataLoader, TensorDataset, random_split
+from torch.utils.data import DataLoader, Subset, TensorDataset, random_split
 from tqdm import tqdm
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -26,7 +26,8 @@ from loop import train_one_epoch, evaluate  # noqa: E402
 def build_dataloaders(data_path: Path, batch_size: int, val_frac: float, seed: int):
     dataset = torch.load(data_path, weights_only=False)
 
-    static = dataset["static"]
+    # Raw static features span ~1e-1 (tr) to ~1e6 (Reynolds number)
+    static = (dataset["static"] - dataset["static_mean"]) / dataset["static_std"]
     t = dataset["t"]
     lengths = dataset["lengths"]
 
@@ -36,11 +37,18 @@ def build_dataloaders(data_path: Path, batch_size: int, val_frac: float, seed: i
 
     full = TensorDataset(static, t, targets, lengths)
 
-    n_val = max(1, int(round(val_frac * len(full))))
-    n_train = len(full) - n_val
-    train_set, val_set = random_split(
-        full, [n_train, n_val], generator=torch.Generator().manual_seed(seed)
-    )
+    if "split" in dataset:
+        # Sample-level split shared with the steady-state dataset; the test
+        # samples are left out entirely.
+        split = dataset["split"]
+        train_set = Subset(full, (split == 0).nonzero().squeeze(1).tolist())
+        val_set = Subset(full, (split == 1).nonzero().squeeze(1).tolist())
+    else:
+        n_val = max(1, int(round(val_frac * len(full))))
+        n_train = len(full) - n_val
+        train_set, val_set = random_split(
+            full, [n_train, n_val], generator=torch.Generator().manual_seed(seed)
+        )
 
     train_loader = DataLoader(train_set, batch_size=batch_size, shuffle=True)
     val_loader = DataLoader(val_set, batch_size=batch_size, shuffle=False)
@@ -56,7 +64,7 @@ def main():
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--hidden-size", type=int, default=64)
     parser.add_argument("--num-layers", type=int, default=2)
-    parser.add_argument("--val-frac", type=float, default=0.1)
+    parser.add_argument("--val-frac", type=float, default=0.1, help="Only used if the dataset has no split")
     parser.add_argument("--seed", type=int, default=0)
     args = parser.parse_args()
 
@@ -97,6 +105,8 @@ def main():
                     "target_size": target_size,
                     "hidden_size": args.hidden_size,
                     "num_layers": args.num_layers,
+                    "static_mean": dataset["static_mean"],
+                    "static_std": dataset["static_std"],
                     "target_mean": dataset["target_mean"],
                     "target_std": dataset["target_std"],
                     "static_columns": dataset["static_columns"],

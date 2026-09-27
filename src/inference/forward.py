@@ -45,13 +45,17 @@ def load_model(checkpoint_path: Path, device: torch.device):
     static_columns = ckpt.get("static_columns", [f"static_{i}" for i in range(ckpt["static_size"])])
     target_columns = ckpt.get("target_columns", [f"target_{i}" for i in range(ckpt["target_size"])])
 
+    # Older checkpoints were trained on unnormalized static features.
+    model.static_mean = ckpt.get("static_mean", torch.zeros(ckpt["static_size"])).to(device)
+    model.static_std = ckpt.get("static_std", torch.ones(ckpt["static_size"])).to(device)
+
     return model, ckpt["target_mean"].to(device), ckpt["target_std"].to(device), static_columns, target_columns
 
 
 @torch.no_grad()
 def predict(model, static: torch.Tensor, t: torch.Tensor, target_mean, target_std) -> torch.Tensor:
-    """static: (B, static_size), t: (B, max_len) -> (B, max_len, target_size) in physical units."""
-    pred = model(static, t)
+    """static: (B, static_size) raw values, t: (B, max_len) -> (B, max_len, target_size) in physical units."""
+    pred = model((static - model.static_mean) / model.static_std, t)
     return pred * target_std + target_mean
 
 
