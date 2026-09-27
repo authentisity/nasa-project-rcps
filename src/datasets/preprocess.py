@@ -59,8 +59,14 @@ def load_sweep(paths) -> pd.DataFrame:
         df = pd.read_csv(path)
         frames.append(df if "mac" in df.columns else _upgrade_legacy(df))
     df = pd.concat(frames, ignore_index=True)
+    # A resumed sweep retries failed samples: keep a single placeholder row
+    # only for samples that never succeeded
+    failed = df[CONVERGED_COLUMN] == 0
+    retried = df[ID_COLUMN].isin(df.loc[~failed, ID_COLUMN])
+    df = df[~(failed & (retried | df.duplicated(ID_COLUMN)))]
     if df.duplicated([ID_COLUMN, STEP_COLUMN]).any():
-        raise ValueError("duplicate (sample_id, step) rows; is a file listed twice?")
+        raise ValueError("duplicate (sample_id, step) rows: a file listed twice, or sweeps "
+                         "with the same sample ids (e.g. legacy and new, or low and high fidelity)?")
     return df
 
 
@@ -95,7 +101,14 @@ def build_steady_dataset(df: pd.DataFrame, tail_frac: float, split: dict) -> dic
     length, a convergence check."""
     df = df[df[CONVERGED_COLUMN] == 1]
     input_columns = list(DESIGN_BOX)
-    target_columns = [c for c in STEADY_TARGETS if df[c].notna().all()]
+    # Converted legacy sweeps have no Cm at all; a target missing in only some
+    # samples means a run diverged without raising
+    missing = df[STEADY_TARGETS].isna()
+    partial = [c for c in STEADY_TARGETS if missing[c].any() and not missing[c].all()]
+    if partial:
+        bad = sorted(df.loc[missing[partial].any(axis=1), ID_COLUMN].unique().tolist())
+        raise ValueError(f"NaN {partial} in converged samples {bad}")
+    target_columns = [c for c in STEADY_TARGETS if not missing[c].all()]
 
     x_raw, y, drift, tail_std, sample_id = [], [], [], [], []
     for sid, g in df.groupby(ID_COLUMN, sort=True):
@@ -157,8 +170,10 @@ def build_dataset(df: pd.DataFrame, split: dict) -> dict:
         t[i, :n] = torch.from_numpy(g[TIME_COLUMN].to_numpy(dtype=np.float32))
         targets[i, :n] = torch.from_numpy(g[target_columns].to_numpy(dtype=np.float32))
 
-    static_mean, static_std = static.mean(0), static.std(0).clamp_min(1e-8)
-    target_mean, target_std = _masked_mean_std(targets, lengths)
+    sample_split = torch.tensor([split[int(s)] for s in sample_id], dtype=torch.long)
+    train = sample_split == 0  # normalization statistics from the training split only
+    static_mean, static_std = static[train].mean(0), static[train].std(0).clamp_min(1e-8)
+    target_mean, target_std = _masked_mean_std(targets[train], lengths[train])
 
     return {
         "static": static,
@@ -166,7 +181,7 @@ def build_dataset(df: pd.DataFrame, split: dict) -> dict:
         "targets": targets,
         "lengths": lengths,
         "sample_id": sample_id,
-        "split": torch.tensor([split[int(s)] for s in sample_id], dtype=torch.long),
+        "split": sample_split,
         "static_columns": static_columns,
         "target_columns": target_columns,
         "static_mean": static_mean,

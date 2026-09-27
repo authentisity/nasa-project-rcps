@@ -69,8 +69,10 @@ Fixes to the vendored layer:
 training-mode forward and on `eval()`. A checkpoint saved in eval mode
 therefore stores intervals that belong to its weights. The reference code
 does the same refresh with a dummy forward after each optimizer step.
-Queries outside the input box raise an error instead of silently extrapolating
-the polynomials.
+`output_bounds` rejects boxes outside the input box. The forward pass does not
+check its inputs, and it extrapolates the polynomials outside the box, so
+callers must keep queries inside `DESIGN_BOX` (`preprocess.py` enforces this for
+the data).
 
 ## 2. Simulation setup (`data/collection/wing_sim.jl`)
 
@@ -89,6 +91,23 @@ high-fidelity PROWIM example (Alvarez & Ning 2023):
 
 The low-fidelity preset is the Weber wing example (actuator line, no SFS) and
 is only meant for smoke tests.
+
+**Particle budget.** The vortex sheet adds static particles to the particle
+field for the duration of every step. There are about 2.125·c/σ_TBV per
+trailing bound vortex, with σ_TBV = 0.12·c_tip/128 as in PROWIM (FLOWVLM's
+b/ar is the tip chord). PROWIM preallocates 10⁶ static particles, which fits
+its rectangular wing. Exact counts for this preset (FLOWUnsteady's own
+`_static_particles` on the generated wings):
+
+| tr                | 1.0         | 0.8   | 0.7   | 0.5   | 0.3         |
+|-------------------|-------------|-------|-------|-------|-------------|
+| static particles  | 0.91–0.93 M | 1.01 M | 1.07 M | 1.26 M | 1.69–1.72 M |
+
+With the fixed 10⁶ budget, every wing with tr < 0.8 (about 70% of the
+sweep) would stop with `PARTICLE OVERFLOW`. For tr ≤ 0.5 that happens at the
+first step. `run_wing` therefore sizes the budget per wing from the root
+chord. These static particles take part in every evaluation of the particle
+field, which is the likely source of most of the per-step cost.
 
 **FLOWVPM 4 compatibility shim.** FLOWUnsteady 3.4 passes `index=` to
 `add_particle` when it builds a wing's vortex sheet, and FLOWVPM 4 removed that

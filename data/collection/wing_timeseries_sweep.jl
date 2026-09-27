@@ -4,14 +4,15 @@
 # state. Steady-state coefficients are extracted downstream from the tail of
 # each transient (src/datasets/preprocess.py).
 #
-# Output: wing_timeseries_data.csv, long format (one row per sample+timestep).
+# Output: wing_timeseries_data_<fidelity>_n<nsteps>.csv, long format (one row
+# per sample+timestep).
 # CL and CD are based on the planform area S_ref, and Cm on S_ref and the mean
 # aerodynamic chord `mac` about the MAC quarter chord. `converged` is 1 if the
 # simulation completed (0 rows are placeholders for failed samples).
 #
 # The Latin hypercube rows are in random order, so any prefix of the samples
 # is itself a uniform random sample of the design space. Rerunning resumes:
-# samples already in the output file are skipped.
+# samples that completed in the output file are skipped, failed ones retried.
 #
 # Usage:
 #   julia -t 16 --project=. wing_timeseries_sweep.jl
@@ -51,8 +52,9 @@ nshards         = parse(Int, get(ENV, "NSHARDS", "1"))
 shard           = parse(Int, get(ENV, "SHARD", "1"))
 @assert 1 <= shard <= nshards "SHARD must be in 1:NSHARDS"
 
-output_file     = nshards == 1 ? "wing_timeseries_data.csv" :
-                  "wing_timeseries_data_shard$(shard)of$(nshards).csv"
+run_tag         = "$(fidelity)_n$(nsteps)"   # never resume into a file of other settings
+output_file     = nshards == 1 ? "wing_timeseries_data_$(run_tag).csv" :
+                  "wing_timeseries_data_$(run_tag)_shard$(shard)of$(nshards).csv"
 seed            = 42
 
 
@@ -106,7 +108,9 @@ if isfile(output_file)
     lines = readlines(output_file)
     @assert !isempty(lines) && lines[1] == CSV_HEADER "$output_file has a different header; move it away first"
     for line in lines[2:end]
-        push!(done_ids, round(Int, parse(Float64, split(line, ",")[1])))
+        fields = split(line, ",")
+        # failed samples (converged = 0 placeholders) are retried
+        fields[end] == "1" && push!(done_ids, round(Int, parse(Float64, fields[1])))
     end
 else
     open(f -> println(f, CSV_HEADER), output_file, "w")
@@ -143,6 +147,7 @@ for idx in my_ids
                                          cfg.twist_tip, cfg.magVinf, b, rho, fidelity, nsteps)
         nrec = min(length(res.t), length(res.CL), length(res.CD), length(res.Cm))
         nrec > 0 || error("no steps logged")
+        all(isfinite, vcat(res.CL, res.CD, res.Cm)) || error("non-finite coefficients")
         for k in 1:nrec
             push!(rows, csv_row(vcat(base, [k, res.t[k], res.CL[k], res.CD[k], res.Cm[k], 1])))
         end

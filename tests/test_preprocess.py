@@ -6,6 +6,7 @@ Usage:
 """
 
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -15,7 +16,7 @@ import pandas as pd
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT / "src" / "datasets"))
 
-from preprocess import DESIGN_BOX, _upgrade_legacy, assign_split, build_steady_dataset  # noqa: E402
+from preprocess import DESIGN_BOX, _upgrade_legacy, assign_split, build_steady_dataset, load_sweep  # noqa: E402
 
 
 def sweep(n_samples=3, n_steps=50):
@@ -72,6 +73,27 @@ class TestPreprocess(unittest.TestCase):
         data = build_steady_dataset(df, tail_frac=0.1, split=split)
         self.assertEqual(data["sample_id"].tolist(), [1, 3])
         self.assertEqual(data["target_columns"], ["CL", "CD"])
+
+    def test_partial_nan_target_raises(self):
+        df = sweep()
+        df.loc[(df.sample_id == 2) & (df.step == 50), "CL"] = np.nan
+        with self.assertRaisesRegex(ValueError, r"\['CL'\].*\[2\]"):
+            build_steady_dataset(df, 0.1, dict.fromkeys([1, 2, 3], 0))
+
+    def test_retried_samples_merged(self):
+        df = sweep().assign(mac=1.0)  # current schema (a legacy file has no mac)
+        placeholder = df[df.step == 1].assign(step=0, CL=np.nan, CD=np.nan, Cm=np.nan, converged=0)
+        # Sample 1 failed twice, sample 2 failed once and then succeeded
+        first_run = pd.concat([df[df.sample_id == 3], placeholder[placeholder.sample_id <= 2]])
+        rerun = pd.concat([placeholder[placeholder.sample_id == 1], df[df.sample_id == 2]])
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = [Path(tmp) / "a.csv", Path(tmp) / "b.csv"]
+            first_run.to_csv(paths[0], index=False)
+            rerun.to_csv(paths[1], index=False)
+            merged = load_sweep(paths)
+        self.assertEqual(merged[merged.converged == 0].sample_id.tolist(), [1])
+        self.assertEqual(sorted(merged[merged.converged == 1].sample_id.unique()), [2, 3])
+        self.assertEqual(len(merged), 1 + 2 * 50)
 
     def test_rejects_inputs_outside_design_box(self):
         df = sweep()

@@ -95,13 +95,23 @@ function run_wing(; AOA, ar, tr, lambda, gamma, twist_tip, magVinf,
     simulation = uns.Simulation(vehicle, maneuver, 0.0, 0.0, ttot;
                                 Vinit=zeros(3), Winit=zeros(3))
 
-    max_particles = (nsteps + 1) * (vlm.get_m(system) * (fs.p_per_step + 1) + fs.p_per_step)
-    max_static_particles = fs.vortexsheet ? 10^6 : nothing
-    fs.vortexsheet && (max_particles += max_static_particles)
-
     sigma_vpm_overwrite = fs.lambda_vpm * magVinf * dt / fs.p_per_step
     sigma_vlm_surf      = fs.sigma_vlm_surf_b * b
     sigma_tbv           = fs.vortexsheet ? thickness * pf.c_tip / 128 : nothing
+
+    m = vlm.get_m(system)
+    max_particles = (nsteps + 1) * (m * (fs.p_per_step + 1) + fs.p_per_step)
+    max_static_particles = nothing
+    if fs.vortexsheet
+        # The vortex sheet's static particles share the main field during each
+        # step (FLOWUnsteady's _static_particles): per horseshoe, 2.125 c/sigma
+        # on each trailing bound vortex and on the lifting sheet. Bounded here
+        # with the root chord; a fixed budget (PROWIM's 10^6, sized for its
+        # rectangular wing) overflows for tr < 0.8, since sigma_tbv ~ c_tip.
+        np_chord(sigma) = ceil(Int, 2.125 * pf.c_root / sigma) + 1
+        max_static_particles = m * (2 * np_chord(sigma_tbv) + np_chord(sigma_vlm_surf))
+        max_particles += max_static_particles
+    end
 
     # Kutta-Joukowski force at the midpoint of each lifting bound vortex plus
     # parasitic drag from the airfoil polar (the vortex sheet only changes the
