@@ -10,10 +10,10 @@ src/datasets/preprocess.py).
                 BernMLP trained on a lower-fidelity sweep of the same design
                 box and targets (select them with --targets). The saved
                 checkpoint holds both networks; load_checkpoint returns their
-                sum as one model. A target the low-fidelity sweep lacks (Cm)
-                gets its own model: --targets Cm without --base. Learning it
-                inside the correction network was worse: early stopping on
-                the small CL/CD correction stops before Cm is fit.
+                sum as one model. A target the base lacks gets its own model
+                (--targets without --base): learning it from scratch inside
+                the correction network was worse, as early stopping on the
+                small correction stops before it is fit.
 
 Targets are standardized with the training-split statistics. The weights with
 the lowest validation loss are kept; a BernMLP is saved in eval mode, so its
@@ -22,10 +22,8 @@ stored Bernstein input intervals belong to the saved weights.
 Usage:
     python src/training/train_steady.py
     python src/training/train_steady.py --arch relu --output checkpoints/wing_steady_relu.pt
-    python src/training/train_steady.py --data data/processed/wing_steady_hifi.pt --targets CL CD \
+    python src/training/train_steady.py --data data/processed/wing_steady_hifi.pt \
         --base checkpoints/wing_steady_bern.pt --output checkpoints/wing_steady_mf.pt
-    python src/training/train_steady.py --data data/processed/wing_steady_hifi.pt --targets Cm \
-        --output checkpoints/wing_steady_cm.pt
 """
 
 import argparse
@@ -106,7 +104,7 @@ def main():
     parser.add_argument("--degree", type=int, default=8, help="Bernstein polynomial degree (bern only)")
     parser.add_argument("--base", type=Path, help="lower-fidelity BernMLP checkpoint to correct (bern only)")
     parser.add_argument("--targets", nargs="+", help="fit only these target columns (default: all)")
-    parser.add_argument("--epochs", type=int, default=5000)
+    parser.add_argument("--epochs", type=int, default=20000)
     parser.add_argument("--lr", type=float, default=3e-3)
     parser.add_argument("--weight-decay", type=float, default=0.0)
     parser.add_argument("--eval-every", type=int, default=10)

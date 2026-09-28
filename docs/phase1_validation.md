@@ -38,12 +38,10 @@ python src/training/train.py                             # WingLSTM on the trans
 #     the low-fidelity sweep, so keep it out of the data/raw glob of step 2
 python src/datasets/preprocess.py --input <hifi.csv> \
     --steady-output data/processed/wing_steady_hifi.pt --output data/processed/wing_dataset_hifi.pt
-python src/training/train_steady.py --data data/processed/wing_steady_hifi.pt --targets CL CD \
+python src/training/train_steady.py --data data/processed/wing_steady_hifi.pt \
     --base checkpoints/wing_steady_bern.pt --output checkpoints/wing_steady_mf.pt
-python src/training/train_steady.py --data data/processed/wing_steady_hifi.pt --targets Cm \
-    --output checkpoints/wing_steady_cm.pt
 python src/inference/eval_steady.py checkpoints/wing_steady_bern.pt checkpoints/wing_steady_mf.pt \
-    checkpoints/wing_steady_cm.pt --data data/processed/wing_steady_hifi.pt
+    --data data/processed/wing_steady_hifi.pt
 # 4. Held-out metrics and Bern-IBP soundness
 python src/inference/eval_steady.py checkpoints/wing_steady_bern.pt checkpoints/wing_steady_relu.pt \
     --lstm checkpoints/wing_lstm.pt
@@ -227,7 +225,7 @@ fraction f. The VLM wing is built from sections along those straight edges.
 It has one chordwise panel (the lifting line that the actuator line model
 uses) or eight (a lifting surface).
 
-CL, 500 legacy low-fidelity designs:
+CL, the 500 low-fidelity designs:
 
 | VLM chordwise panels | r      | CL / CL_VLM, median (5–95%) | residual std |
 |----------------------|--------|-----------------------------|--------------|
@@ -241,18 +239,19 @@ tr ≥ 0.9, and the CL residual std rises to 0.021. So the simulated twist
 response is right, and `twist_tip` means the tip twist of this straight-edged
 wing. A design found in Phase 2 has to be built that way.
 
-Cm, the first 47 designs of the re-run low-fidelity sweep:
+Cm, the same 500 designs:
 
-| VLM chordwise panels | r     | Cm fit                  | MAE    |
-|----------------------|-------|-------------------------|--------|
-| 1                    | 0.984 | 0.986 Cm_VLM + 0.0022   | 0.0022 |
-| 8                    | 0.929 | 0.826 Cm_VLM + 0.0019   | 0.0048 |
+| VLM chordwise panels | r     | Cm fit                  | MAE    | 95th pct. error |
+|----------------------|-------|-------------------------|--------|-----------------|
+| 1                    | 0.987 | 1.001 Cm_VLM + 0.0018   | 0.0018 | 0.0067          |
+| 8                    | 0.927 | 0.851 Cm_VLM + 0.0014   | 0.0045 | 0.0137          |
 
 Cm matches the lifting line, so its sign, reference point and sensitivities
 are right. It differs more from the lifting surface, and the difference grows
-with sweep (r = 0.72 with Λ). A lifting line misplaces the chordwise load on
-swept and low-aspect-ratio wings. The simulated Cm (range −0.035 to 0.054
-here) is therefore uncertain by about 0.005.
+with sweep (r = 0.70 with Λ). A lifting line misplaces the chordwise load on
+swept and low-aspect-ratio wings. The simulated Cm (range −0.057 to 0.077)
+is therefore uncertain by about 0.005, and by up to 0.014 on highly swept
+wings.
 
 ### Weber & Brebner 45° swept wing (`validate_weber.jl`)
 
@@ -289,60 +288,82 @@ a uniform span loading (0) and an elliptic one (about 0.19 MAC ahead) on this
 
 The steady-state value is the mean over the last 10% of the steps, and the
 drift is its change from the preceding 10%. In the low-fidelity data the
-median drift is 4e-4 for CL and 1e-5 for CD. Only 1 of 500 samples drifts by
-more than 1%, in CL. The high-fidelity sweep records the same diagnostics
-(`drift` and `tail_std` in `wing_steady.pt`).
+median drift is 4e-4 for CL, 1e-5 for CD and 5e-6 for Cm. The largest drifts
+are 3e-3 (CL), 7e-5 (CD) and 8e-5 (Cm). A relative drift above 1% occurs only
+where the value is near zero: one CL of 0.014 and three Cm of |Cm| ≤ 0.001.
+The high-fidelity sweep records the same diagnostics (`drift` and `tail_std`
+in `wing_steady.pt`).
 
-## 4. Surrogate accuracy (low-fidelity legacy data, CL/CD)
+The re-run low-fidelity sweep reproduces the legacy one: over the 500
+designs, CL differs by a median of 8e-6 (relative) and at most 4e-3, and CD
+by a median of 5e-6 and at most 3e-4.
 
-This data was used to develop the pipeline while the high-fidelity sweep runs.
-It has 500 LHS samples at 198 steps each, with CL/CD converted to the
-planform area. Scores are on the 48 held-out test designs, in physical units:
+## 4. Surrogate accuracy (low-fidelity data)
 
-| model                       | CL R²    | CL MAE  | CL max err | CD R²    | CD MAE  | CD max err |
-|-----------------------------|----------|---------|------------|----------|---------|------------|
-| BernMLP (64, 64), degree 8  | 0.99983  | 2.4e-3  | 9.7e-3     | 0.99987  | 1.4e-4  | 4.7e-4     |
-| ReLU MLP (64, 64)           | 0.99896  | 6.1e-3  | 2.9e-2     | 0.99864  | 4.2e-4  | 1.3e-3     |
-| WingLSTM (tail mean)        | 0.99938  | 4.0e-3  | 2.9e-2     | 0.99960  | 2.1e-4  | 1.3e-3     |
+The 500 low-fidelity designs (198 steps each) are split into 397 training,
+55 validation and 48 test designs. Settings were chosen on the validation
+designs. The table gives scores on the test designs, in physical units, as
+the mean over 3 training seeds (one WingLSTM):
 
-Settings: full-batch AdamW with cosine decay, 5000 epochs, lr 3e-3, float64.
-The checkpoint with the lowest validation loss is kept.
+| model                                        | CL R²   | CL MAE | CD R²   | CD MAE | Cm R²   | Cm MAE |
+|----------------------------------------------|---------|--------|---------|--------|---------|--------|
+| BernMLP (64, 64), degree 8, one net for all  | 0.99992 | 1.6e-3 | 0.99991 | 1.0e-4 | 0.99937 | 2.8e-4 |
+| BernMLP, one net per target                  | 0.99996 | 1.3e-3 | 0.99995 | 8.1e-5 | 0.99902 | 3.6e-4 |
+| BernMLP, CL/CD net + Cm net, no `magVinf`    | 0.99997 | 9.8e-4 | 0.99997 | 6.6e-5 | 0.99939 | 2.9e-4 |
+| ReLU MLP (64, 64)                            | 0.99853 | 7.4e-3 | 0.99827 | 4.8e-4 | 0.99045 | 1.2e-3 |
+| WingLSTM (tail mean)                         | 0.99759 | 7.8e-3 | 0.99798 | 4.6e-4 | 0.99532 | 8.3e-4 |
 
-The result holds across seeds and degrees:
+The largest test errors (CL, CD, Cm) are 7.9e-3, 6.0e-4 and 1.6e-3 for the
+first BernMLP, 3.2e-2, 2.7e-3 and 6.3e-3 for the ReLU MLP, and 6.4e-2, 2.0e-3
+and 4.3e-3 for the WingLSTM. Every BernMLP variant has a 4–8× lower MAE than
+both baselines in CL and CD, and 2–4× in Cm. The Cm errors are far below
+the uncertainty of the simulated Cm itself (about 0.005, section 3).
 
-- **Degree 8, 3 seeds:** CL R² 0.99966–0.99983, CD R² 0.99972–0.99987.
-- **Degree 4:** CL R² 0.99967, CD R² 0.99950.
-- **Degree 12:** CL R² 0.99986, CD R² 0.99977.
+Settings: full-batch AdamW with cosine decay, 20000 epochs, lr 3e-3, float64.
+The weights with the lowest validation loss are kept. On the validation
+designs (3 seeds each):
 
-Every variant beats both baselines.
+- **Training length:** at 5000 epochs the validation loss was still falling
+  at the last epoch. 20000 epochs lowers it 2.5×.
+- **Size:** degree 4 is worse (Cm R² 0.9962 against 0.9985). Degree 12 and
+  width 128 are no better than degree 8, width 64.
+
+**`magVinf`.** The low-fidelity coefficients do not depend on `magVinf`: the
+drag polar is for a fixed Re, the VPM is inviscid, and V·dt is fixed. Whatever
+dependence the network learns is fitted noise. Sweeping `magVinf` over its
+range moves the first model's CL by 2e-3 and its Cm by 3e-4 on average, the
+size of its test errors (against 0.76 and 0.016 for AOA). Removing the input
+lowers the errors of separate nets by about 20% (third row against second).
 
 **Bern-IBP.** Over 256 random sub-boxes × 1000 samples, no sampled output
-fell outside its bounds. The bounds are tight on small boxes but loose on the
-whole design box:
+fell outside its bounds, for every model. Bound width relative to the data
+range of the target, mean over 3 seeds:
 
-| box                              | CL bound width / CL data range | CD bound width / CD data range |
-|----------------------------------|------|------|
-| random sub-boxes, ≤ ½ side, mean | 0.46 | 0.55 |
-| whole design box                 | 3.4  | 4.8  |
+| model                              | sub-boxes (≤ ½ side): CL | CD   | Cm   | whole box: CL | CD  | Cm  |
+|------------------------------------|------|------|------|-----|-----|-----|
+| one net for all                    | 0.95 | 1.03 | 1.05 | 6.8 | 8.8 | 7.9 |
+| one net per target                 | 0.42 | 0.34 | 0.55 | 3.3 | 3.4 | 3.7 |
+| CL/CD net + Cm net, no `magVinf`   | 0.49 | 0.52 | 0.56 | 4.0 | 5.1 | 3.7 |
 
-Phase 2 reachability will therefore need input-space splitting (branch and
-bound) to get useful bounds.
+One net for all three targets doubles the bounds without being more
+accurate. Bern-IBP bounds each output separately, and the shared hidden
+layers have to represent all three targets. The bounds are tight on small
+boxes but loose on the whole design box, so Phase 2 reachability will need
+input-space splitting (branch and bound) to get useful bounds.
+
+`train_steady.py` trains one net for all targets by default; `--targets`
+trains a net for a subset. The no-`magVinf` rows used the dataset with that
+column removed.
 
 ## 5. Multi-fidelity surrogate
 
 Running all 500 designs at high fidelity would take about 5–6 weeks (section
-6), so the final surrogate combines the two sweeps:
-
-- **CL, CD:** the low-fidelity BernMLP (500 designs) plus a BernMLP
-  correction trained on the high-fidelity residual y − base(x)
-  (`train_steady.py --base`). Both networks are defined on the same input
-  box, so the Bern-IBP bounds of their sum are the sum of their bounds
-  (`tests/test_train_steady.py`).
-- **Cm:** the legacy low-fidelity data has no valid Cm, so Cm was planned
-  as a separate BernMLP trained on the high-fidelity data only
-  (`--targets Cm`). The low-fidelity sweep is being re-run with the current
-  script, which records Cm, so the base model will predict Cm too. Whether
-  the correction also covers Cm will be decided on real high-fidelity pairs.
+6), so the final surrogate combines the two sweeps. It is the low-fidelity
+BernMLP (500 designs) plus a BernMLP correction trained on the high-fidelity
+residual y − base(x) (`train_steady.py --base`). Both networks are defined
+on the same input box, so the Bern-IBP bounds of their sum are the sum of
+their bounds (`tests/test_train_steady.py`). The base predicts CL, CD and Cm,
+and the correction covers all three.
 
 The high-fidelity sweep uses the same LHS (seed 42) as the low-fidelity one,
 so each high-fidelity sample is paired with the low-fidelity sample of the
@@ -353,10 +374,12 @@ box.
 
 **First pairs** (steady values, planform reference area):
 
-| id | design (AOA, ar, tr, Λ, twist) | CL hi | CL lo | ΔCL | CD hi | CD lo | ΔCD | Cm hi |
-|----|------|-------|-------|-----|-------|-------|-----|-------|
-| 1 | 5.6°, 8.0, 0.64, 23°, −2.8° | 0.3410 | 0.3433 | −0.7% | 0.01435 | 0.01429 | +0.4% | +0.0181 |
-| 2 | 1.2°, 7.2, 0.98, 3°, +2.7° | 0.1811 | 0.1836 | −1.4% | 0.00968 | 0.00969 | −0.1% | +0.0000 |
+| id | design (AOA, ar, tr, Λ, twist) | CL hi | CL lo | ΔCL | CD hi | CD lo | ΔCD | Cm hi | Cm lo |
+|----|------|-------|-------|-----|-------|-------|-----|-------|-------|
+| 1 | 5.6°, 8.0, 0.64, 23°, −2.8° | 0.3410 | 0.3433 | −0.7% | 0.01435 | 0.01429 | +0.4% | +0.0181 | +0.0181 |
+| 2 | 1.2°, 7.2, 0.98, 3°, +2.7° | 0.1811 | 0.1836 | −1.4% | 0.00968 | 0.00969 | −0.1% | +0.0000 | +0.0000 |
+
+The two fidelities agree in Cm to within 1e-4 here.
 
 **Synthetic check of the training setup.** To exercise the pipeline before
 enough high-fidelity data exists, a stand-in was built from the first 100
@@ -372,20 +395,20 @@ The split was 83 train, 9 val and 8 test designs. Test-split scores:
 | Cm only, high fidelity (16, 16), d4    | –       | –      | –       | –      | 0.9915 |
 
 The correction cuts the CL/CD error 3–8× compared with either single-fidelity
-model. Learning Cm inside the correction network was also tried. It was worse
-on the validation designs (Cm R² 0.93 against 0.98–0.99). Early stopping on
-the small, quickly fit CL/CD correction stops training before Cm is fit, so
-Cm gets its own model. The real comparison on high-fidelity test designs is
+model. This check predates the low-fidelity Cm, so Cm got its own model.
+Learning Cm from scratch inside the correction network was worse on the
+validation designs (Cm R² 0.93 against 0.98–0.99): early stopping on the
+small, quickly fit CL/CD correction stops training before Cm is fit. With a
+low-fidelity Cm in the base, the Cm correction is small too (under 1e-4 on
+the first two pairs). The real comparison on high-fidelity test designs is
 pending until enough samples exist.
 
 ## 6. Limitations
 
 - **The parasitic drag polar is fixed.** It is NACA 0012 at Re = 5e5. The VPM
-  is inviscid, so the coefficients are almost independent of `magVinf`. In the
-  trained surrogate, varying `magVinf` over its full range changes CL by 0.003
-  on average, against 0.78 for AOA. `magVinf` could be dropped as an input,
-  or the polar made Reynolds-dependent (only a few discrete polars are
-  available).
+  is inviscid, so the low-fidelity coefficients do not depend on `magVinf`
+  (section 4). `magVinf` could be dropped as an input, or the polar made
+  Reynolds-dependent (only a few discrete polars are available).
 - **High-fidelity cost.** The Weber run (tr = 1, about 0.92 M static
   particles, up to 0.21 M wake particles) took 2 h 01 min on 16 threads, about
   36 s per step. The first two sweep samples (tr = 0.64 and 0.98) took 1 h
@@ -398,7 +421,5 @@ pending until enough samples exist.
   whole transient. Only this untapered wing has been compared.
 - **No stall.** CL comes from the lattice, so it stays linear up to 12°. The
   polar only adds parasitic drag.
-- **Legacy low-fidelity data has no valid Cm.** The re-run low-fidelity sweep
-  records Cm (section 5).
 - **Cm is a lifting-line Cm.** It differs from a lifting-surface VLM by 0.005
   on average, more on swept wings (section 3).
