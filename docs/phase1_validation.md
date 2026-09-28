@@ -13,7 +13,7 @@ from FLOWUnsteady (Alvarez & Ning) unsteady VPM simulations.
 | `tr`        | 0.3 – 1      | taper ratio c_tip / c_root                |
 | `lambda`    | 0 – 50°      | leading-edge sweep                        |
 | `gamma`     | −5 – 10°     | dihedral                                  |
-| `twist_tip` | −5 – 5°      | tip twist (root 0°, linear)               |
+| `twist_tip` | −5 – 5°      | tip twist (root 0°); straight leading and trailing edges in between, so not linear in span when tr < 1 (section 3) |
 | `magVinf`   | 20 – 80 m/s  | freestream speed (sea level)              |
 
 Span b = 2.489 m is fixed. The surrogate takes the inputs scaled to [0, 1]⁷
@@ -211,7 +211,47 @@ chord-weighted mean of the linear twist, and only AOA > 2° is used.
 
 The simulated slopes are about 3% below DATCOM and track its variation across
 planforms. That gap is comparable to the accuracy of the DATCOM estimate
-itself. The spread widens with twist because the θ_eff model is crude.
+itself. The spread widens with twist because θ_eff assumes a twist angle
+linear in span, which the wing does not have (next check).
+
+### Vortex lattice cross-check (`src/validation/vlm_check.py`)
+
+AeroSandbox's vortex lattice method (4.2.10) was run on the same wing with
+the same S, MAC and moment reference. The wing is FLOWVLM's `simpleWing`:
+straight leading and trailing edges between the root chord and the tip chord,
+the tip rotated by `twist_tip` about its leading edge. On a tapered wing the
+local twist angle is then smaller inboard than a linear distribution gives:
+θ(f) = atan(f c_tip sin θ_t / (c_root(1 − f) + f c_tip cos θ_t)) at span
+fraction f. The VLM wing is built from sections along those straight edges.
+It has one chordwise panel (the lifting line that the actuator line model
+uses) or eight (a lifting surface).
+
+CL, 500 legacy low-fidelity designs:
+
+| VLM chordwise panels | r      | CL / CL_VLM, median (5–95%) | residual std |
+|----------------------|--------|-----------------------------|--------------|
+| 1                    | 0.9997 | 1.000 (0.961 – 1.015)       | 0.0055       |
+| 8                    | 0.9995 | 0.991 (0.941 – 1.011)       | 0.0077       |
+
+The CL sensitivity to `twist_tip` is 0.96–0.99 of the VLM's in every taper
+band. A VLM wing with the twist angle linear in span instead gives a
+sensitivity 1.6× the simulated one at tr = 0.3–0.45, falling to 1.06× at
+tr ≥ 0.9, and the CL residual std rises to 0.021. So the simulated twist
+response is right, and `twist_tip` means the tip twist of this straight-edged
+wing. A design found in Phase 2 has to be built that way.
+
+Cm, the first 47 designs of the re-run low-fidelity sweep:
+
+| VLM chordwise panels | r     | Cm fit                  | MAE    |
+|----------------------|-------|-------------------------|--------|
+| 1                    | 0.984 | 0.986 Cm_VLM + 0.0022   | 0.0022 |
+| 8                    | 0.929 | 0.826 Cm_VLM + 0.0019   | 0.0048 |
+
+Cm matches the lifting line, so its sign, reference point and sensitivities
+are right. It differs more from the lifting surface, and the difference grows
+with sweep (r = 0.72 with Λ). A lifting line misplaces the chordwise load on
+swept and low-aspect-ratio wings. The simulated Cm (range −0.035 to 0.054
+here) is therefore uncertain by about 0.005.
 
 ### Weber & Brebner 45° swept wing (`validate_weber.jl`)
 
@@ -359,3 +399,5 @@ pending until enough samples exist.
   polar only adds parasitic drag.
 - **Legacy low-fidelity data has no valid Cm.** The re-run low-fidelity sweep
   records Cm (section 5).
+- **Cm is a lifting-line Cm.** It differs from a lifting-surface VLM by 0.005
+  on average, more on swept wings (section 3).

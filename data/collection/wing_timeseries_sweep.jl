@@ -36,7 +36,7 @@ ar_range        = (3.0, 10.0)       # Aspect ratio (b / c_tip)
 tr_range        = (0.3, 1.0)        # Taper ratio (c_tip / c_root)
 lambda_range    = (0.0, 50.0)       # (deg) leading-edge sweep angle
 gamma_range     = (-5.0, 10.0)      # (deg) dihedral angle
-twist_tip_range = (-5.0, 5.0)       # (deg) tip twist (washout if negative)
+twist_tip_range = (-5.0, 5.0)       # (deg) tip twist (washout if negative), straight LE/TE from the untwisted root
 magVinf_range   = (20.0, 80.0)      # (m/s) freestream velocity
 
 # Fixed parameters
