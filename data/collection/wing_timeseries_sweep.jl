@@ -14,12 +14,14 @@
 # is itself a uniform random sample of the design space. Rerunning resumes:
 # samples that completed in the output file are skipped, failed ones retried.
 #
-# Usage:
-#   julia -t 16 --project=. wing_timeseries_sweep.jl
+# Usage (--gcthreads=1: Julia 1.10.2's parallel garbage collector segfaulted
+# about once per 10 process-hours in the low-fidelity sweep; the flag costs
+# under 1% of run time):
+#   julia -t 16 --gcthreads=1 --project=. wing_timeseries_sweep.jl
 #
 # Optional sharding across processes: shard k of N runs samples k, k+N, k+2N,
 # ... and writes its own CSV. Concatenate the shard files after all finish.
-#   SHARD=2 NSHARDS=4 julia -t 4 --project=. wing_timeseries_sweep.jl
+#   SHARD=2 NSHARDS=4 julia -t 4 --gcthreads=1 --project=. wing_timeseries_sweep.jl
 #
 # FIDELITY=low selects the Weber-example preset (base training data); NSTEPS
 # overrides the number of time steps.

@@ -24,9 +24,10 @@ defined only on that box, so the box is also the domain for reachability.
 
 ```bash
 # 1. Simulate (data/collection, Julia 1.10); resumable, shardable. Low fidelity
-#    is the base data (4 shards of 4 threads); FIDELITY=high the correction data
+#    is the base data (4 shards of 4 threads); FIDELITY=high the correction data.
+#    --gcthreads=1 avoids segfaults in Julia 1.10.2's parallel garbage collector
 cd data/collection && for k in 1 2 3 4; do
-    FIDELITY=low SHARD=$k NSHARDS=4 julia -t 4 --project=. wing_timeseries_sweep.jl & done
+    FIDELITY=low SHARD=$k NSHARDS=4 julia -t 4 --gcthreads=1 --project=. wing_timeseries_sweep.jl & done
 # 2. Steady-state + time-series datasets, shared train/val/test split
 python src/datasets/preprocess.py --input data/raw/wing_timeseries_data_low_*.csv
 # 3. Surrogate (BernMLP) and baselines
