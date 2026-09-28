@@ -23,11 +23,12 @@ import torch
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 B = 2.489  # (m) span, fixed in wing_timeseries_sweep.jl
-INPUTS = ["AOA", "ar", "tr", "lambda", "gamma", "twist_tip", "magVinf"]
+INPUTS = ["AOA", "ar", "tr", "lambda", "gamma", "twist_tip"]
 
 
-def vlm(AOA, ar, tr, lam, gam, twist_tip, magVinf, chordwise, n_sections=13):
-    """CL and Cm (MAC quarter chord, nose-up +) of the VLM on the sweep's wing."""
+def vlm(AOA, ar, tr, lam, gam, twist_tip, chordwise, n_sections=13):
+    """CL and Cm (MAC quarter chord, nose-up +) of the VLM on the sweep's wing.
+    The VLM is inviscid, so the coefficients do not depend on the speed."""
     t = lambda a: np.tan(np.radians(a))
     c_tip = B / ar
     c_root = c_tip / tr
@@ -47,7 +48,7 @@ def vlm(AOA, ar, tr, lam, gam, twist_tip, magVinf, chordwise, n_sections=13):
     plane = asb.Airplane(wings=[asb.Wing(symmetric=True, xsecs=xsecs)],
                          xyz_ref=[y_mac * t(lam) + mac / 4, 0, y_mac * t(gam)],
                          s_ref=S, c_ref=mac, b_ref=B)
-    r = asb.VortexLatticeMethod(plane, asb.OperatingPoint(velocity=magVinf, alpha=AOA),
+    r = asb.VortexLatticeMethod(plane, asb.OperatingPoint(velocity=50.0, alpha=AOA),
                                 spanwise_resolution=2, chordwise_resolution=chordwise).run()
     return r["CL"], r["Cm"]
 
