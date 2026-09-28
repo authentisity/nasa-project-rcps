@@ -3,7 +3,10 @@
 #
 # Fidelity presets:
 #   "high"  Settings of the high-fidelity preset in FLOWUnsteady's PROWIM
-#           example (Alvarez & Ning 2023, AIAA J.): actuator surface model
+#           example, which replicates Alvarez & Ning 2023, J. Aircraft,
+#           doi:10.2514/1.C037279 (an untapered, unswept wing with two
+#           propellers). The rVPM and SFS model are from Alvarez & Ning 2023,
+#           AIAA J., doi:10.2514/1.J063045. Actuator surface model
 #           (vortex sheet), dynamic SFS LES model, RK3, 5 sheds per step,
 #           lambda = 2.125, 100 elements per semi-span (loads converged to <1%
 #           for n >= 100, Alvarez 2022 dissertation, wing convergence study).

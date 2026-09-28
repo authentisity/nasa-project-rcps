@@ -90,7 +90,10 @@ FLOWUnsteady 3.4 (master), FLOWVLM 2.1.4 and FLOWVPM 4.0.3, as pinned in
 `data/collection/Manifest.toml`.
 
 **High-fidelity preset** (used by the sweep), following FLOWUnsteady's
-high-fidelity PROWIM example (Alvarez & Ning 2023):
+high-fidelity PROWIM example. That example replicates Alvarez & Ning (2023,
+J. Aircraft, doi:10.2514/1.C037279), whose wing is untapered and unswept,
+with two propellers. The rVPM formulation and its SFS model come from
+Alvarez & Ning (2023, AIAA J., doi:10.2514/1.J063045).
 
 - actuator surface model (vortex sheet, `g_pressure` distribution)
 - dynamic SFS LES model with backscatter clipping, and RK3 integration
