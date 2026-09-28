@@ -20,7 +20,7 @@ from bern_net import BernMLP  # noqa: E402
 from test_bern_net import sample_box  # noqa: E402
 from train_steady import Corrected, model_from_checkpoint  # noqa: E402
 
-INPUTS = ["AOA", "ar", "tr", "lambda", "gamma", "twist_tip", "magVinf"]
+INPUTS = ["AOA", "ar", "tr", "lambda", "gamma", "twist_tip"]
 
 
 def checkpoint(targets, seed):

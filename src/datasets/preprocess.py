@@ -37,8 +37,10 @@ CONVERGED_COLUMN = "converged"
 META_COLUMNS = {ID_COLUMN, STEP_COLUMN, TIME_COLUMN, CONVERGED_COLUMN}
 
 # Design inputs and the box they are sampled from in wing_timeseries_sweep.jl.
-# The steady surrogate takes them scaled to [0, 1]^7; its Bernstein layers are
+# The steady surrogate takes them scaled to [0, 1]^6; its Bernstein layers are
 # only defined on that box, which is therefore also the reachability domain.
+# The sweep also samples magVinf, but it is not an input: with a fixed-Re polar
+# and an inviscid VPM the coefficients do not depend on it (docs, section 4).
 DESIGN_BOX = {
     "AOA": (0.0, 12.0),
     "ar": (3.0, 10.0),
@@ -46,7 +48,6 @@ DESIGN_BOX = {
     "lambda": (0.0, 50.0),
     "gamma": (-5.0, 10.0),
     "twist_tip": (-5.0, 5.0),
-    "magVinf": (20.0, 80.0),
 }
 STEADY_TARGETS = ["CL", "CD", "Cm"]
 

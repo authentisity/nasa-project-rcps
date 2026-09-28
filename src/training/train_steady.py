@@ -1,5 +1,5 @@
 """
-Train a steady-state surrogate, the 7 design inputs scaled to [0, 1]^7 ->
+Train a steady-state surrogate, the 6 design inputs scaled to [0, 1]^6 ->
 steady CL/CD(/Cm), on data/processed/wing_steady.pt (built by
 src/datasets/preprocess.py).
 
@@ -19,11 +19,15 @@ Targets are standardized with the training-split statistics. The weights with
 the lowest validation loss are kept; a BernMLP is saved in eval mode, so its
 stored Bernstein input intervals belong to the saved weights.
 
+The surrogate is two BernMLPs, one for CL/CD and one for Cm: a single net for
+all targets doubles the Bern-IBP bounds (docs/phase1_validation.md, section 4).
+
 Usage:
-    python src/training/train_steady.py
+    python src/training/train_steady.py --targets CL CD --output checkpoints/wing_steady_clcd.pt
+    python src/training/train_steady.py --targets Cm --output checkpoints/wing_steady_cm.pt
     python src/training/train_steady.py --arch relu --output checkpoints/wing_steady_relu.pt
-    python src/training/train_steady.py --data data/processed/wing_steady_hifi.pt \
-        --base checkpoints/wing_steady_bern.pt --output checkpoints/wing_steady_mf.pt
+    python src/training/train_steady.py --data data/processed/wing_steady_hifi.pt --targets CL CD \
+        --base checkpoints/wing_steady_clcd.pt --output checkpoints/wing_steady_mf_clcd.pt
 """
 
 import argparse

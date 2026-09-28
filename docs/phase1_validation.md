@@ -1,7 +1,7 @@
 # Phase 1: surrogate model — implementation and validation notes
 
 Phase 1 produces a steady-state surrogate of the aerodynamics of an isolated
-wing: 7 design/flight inputs → steady CL, CD, Cm. The model is a DeepBern-Net
+wing: 6 design inputs → steady CL, CD, Cm. The model is a DeepBern-Net
 (Khedr & Shoukry, arXiv:2305.13508), so Phase 2 can bound its outputs over
 input boxes with Bern-IBP and run backward reachability. Training data comes
 from FLOWUnsteady (Alvarez & Ning) unsteady VPM simulations.
@@ -14,11 +14,12 @@ from FLOWUnsteady (Alvarez & Ning) unsteady VPM simulations.
 | `lambda`    | 0 – 50°      | leading-edge sweep                        |
 | `gamma`     | −5 – 10°     | dihedral                                  |
 | `twist_tip` | −5 – 5°      | tip twist (root 0°); straight leading and trailing edges in between, so not linear in span when tr < 1 (section 3) |
-| `magVinf`   | 20 – 80 m/s  | freestream speed (sea level)              |
 
-Span b = 2.489 m is fixed. The surrogate takes the inputs scaled to [0, 1]⁷
+Span b = 2.489 m is fixed. The surrogate takes the inputs scaled to [0, 1]⁶
 (`DESIGN_BOX` in `src/datasets/preprocess.py`). Its Bernstein layers are
 defined only on that box, so the box is also the domain for reachability.
+The sweep also samples the freestream speed `magVinf` (20–80 m/s, sea level).
+It is not an input, because the coefficients do not depend on it (section 4).
 
 ## Pipeline
 
@@ -30,20 +31,23 @@ cd data/collection && for k in 1 2 3 4; do
     FIDELITY=low SHARD=$k NSHARDS=4 julia -t 4 --gcthreads=1 --project=. wing_timeseries_sweep.jl & done
 # 2. Steady-state + time-series datasets, shared train/val/test split
 python src/datasets/preprocess.py --input data/raw/wing_timeseries_data_low_*.csv
-# 3. Surrogate (BernMLP) and baselines
-python src/training/train_steady.py                      # -> checkpoints/wing_steady_bern.pt
+# 3. Surrogate: a BernMLP for CL/CD and one for Cm (section 4), and baselines
+python src/training/train_steady.py --targets CL CD --output checkpoints/wing_steady_clcd.pt
+python src/training/train_steady.py --targets Cm --output checkpoints/wing_steady_cm.pt
 python src/training/train_steady.py --arch relu --output checkpoints/wing_steady_relu.pt
 python src/training/train.py                             # WingLSTM on the transients
-# 3b. Multi-fidelity (section 5). The high-fidelity CSV shares sample ids with
-#     the low-fidelity sweep, so keep it out of the data/raw glob of step 2
+# 3b. Multi-fidelity (section 5), a correction per base net. The high-fidelity CSV
+#     shares sample ids with the low-fidelity sweep, so keep it out of the glob of step 2
 python src/datasets/preprocess.py --input <hifi.csv> \
     --steady-output data/processed/wing_steady_hifi.pt --output data/processed/wing_dataset_hifi.pt
-python src/training/train_steady.py --data data/processed/wing_steady_hifi.pt \
-    --base checkpoints/wing_steady_bern.pt --output checkpoints/wing_steady_mf.pt
-python src/inference/eval_steady.py checkpoints/wing_steady_bern.pt checkpoints/wing_steady_mf.pt \
+python src/training/train_steady.py --data data/processed/wing_steady_hifi.pt --targets CL CD \
+    --base checkpoints/wing_steady_clcd.pt --output checkpoints/wing_steady_mf_clcd.pt
+python src/training/train_steady.py --data data/processed/wing_steady_hifi.pt --targets Cm \
+    --base checkpoints/wing_steady_cm.pt --output checkpoints/wing_steady_mf_cm.pt
+python src/inference/eval_steady.py checkpoints/wing_steady_{clcd,cm,mf_clcd,mf_cm}.pt \
     --data data/processed/wing_steady_hifi.pt
 # 4. Held-out metrics and Bern-IBP soundness
-python src/inference/eval_steady.py checkpoints/wing_steady_bern.pt checkpoints/wing_steady_relu.pt \
+python src/inference/eval_steady.py checkpoints/wing_steady_{clcd,cm,relu}.pt \
     --lstm checkpoints/wing_lstm.pt
 # Unit tests
 python -m unittest discover tests
@@ -303,21 +307,26 @@ by a median of 5e-6 and at most 3e-4.
 The 500 low-fidelity designs (198 steps each) are split into 397 training,
 55 validation and 48 test designs. Settings were chosen on the validation
 designs. The table gives scores on the test designs, in physical units, as
-the mean over 3 training seeds (one WingLSTM):
+the mean over 3 training seeds (one WingLSTM). The surrogate is the first
+row: two BernMLPs (64, 64) of degree 8, one for CL and CD and one for Cm, on
+the 6 inputs. The next two rows are the alternatives it was chosen over, both
+trained with `magVinf` as a seventh input.
 
 | model                                        | CL R²   | CL MAE | CD R²   | CD MAE | Cm R²   | Cm MAE |
 |----------------------------------------------|---------|--------|---------|--------|---------|--------|
-| BernMLP (64, 64), degree 8, one net for all  | 0.99992 | 1.6e-3 | 0.99991 | 1.0e-4 | 0.99937 | 2.8e-4 |
-| BernMLP, one net per target                  | 0.99996 | 1.3e-3 | 0.99995 | 8.1e-5 | 0.99902 | 3.6e-4 |
-| BernMLP, CL/CD net + Cm net, no `magVinf`    | 0.99997 | 9.8e-4 | 0.99997 | 6.6e-5 | 0.99939 | 2.9e-4 |
-| ReLU MLP (64, 64)                            | 0.99853 | 7.4e-3 | 0.99827 | 4.8e-4 | 0.99045 | 1.2e-3 |
+| BernMLP, CL/CD net + Cm net (the surrogate)  | 0.99997 | 9.8e-4 | 0.99997 | 6.6e-5 | 0.99939 | 2.9e-4 |
+| BernMLP, one net for all, with `magVinf`     | 0.99992 | 1.6e-3 | 0.99991 | 1.0e-4 | 0.99937 | 2.8e-4 |
+| BernMLP, one net per target, with `magVinf`  | 0.99996 | 1.3e-3 | 0.99995 | 8.1e-5 | 0.99902 | 3.6e-4 |
+| ReLU MLP (64, 64), one net for all           | 0.99882 | 6.5e-3 | 0.99863 | 4.0e-4 | 0.98545 | 1.3e-3 |
 | WingLSTM (tail mean)                         | 0.99759 | 7.8e-3 | 0.99798 | 4.6e-4 | 0.99532 | 8.3e-4 |
 
-The largest test errors (CL, CD, Cm) are 7.9e-3, 6.0e-4 and 1.6e-3 for the
-first BernMLP, 3.2e-2, 2.7e-3 and 6.3e-3 for the ReLU MLP, and 6.4e-2, 2.0e-3
-and 4.3e-3 for the WingLSTM. Every BernMLP variant has a 4–8× lower MAE than
-both baselines in CL and CD, and 2–4× in Cm. The Cm errors are far below
-the uncertainty of the simulated Cm itself (about 0.005, section 3).
+The largest test errors over the seeds (CL, CD, Cm) are 4.7e-3, 2.1e-4 and
+1.4e-3 for the surrogate, 4.6e-2, 2.8e-3 and 9.0e-3 for the ReLU MLP, and
+6.4e-2, 2.0e-3 and 4.3e-3 for the WingLSTM. The surrogate's MAE is 6–8× lower
+than both baselines' in CL and CD, and 3–5× in Cm. Its Cm errors are far
+below the uncertainty of the simulated Cm itself (about 0.005, section 3).
+The WingLSTM takes its static inputs from the sweep, so it still sees
+`magVinf`.
 
 Settings: full-batch AdamW with cosine decay, 20000 epochs, lr 3e-3, float64.
 The weights with the lowest validation loss are kept. On the validation
@@ -328,22 +337,23 @@ designs (3 seeds each):
 - **Size:** degree 4 is worse (Cm R² 0.9962 against 0.9985). Degree 12 and
   width 128 are no better than degree 8, width 64.
 
-**`magVinf`.** The low-fidelity coefficients do not depend on `magVinf`: the
-drag polar is for a fixed Re, the VPM is inviscid, and V·dt is fixed. Whatever
-dependence the network learns is fitted noise. Sweeping `magVinf` over its
-range moves the first model's CL by 2e-3 and its Cm by 3e-4 on average, the
-size of its test errors (against 0.76 and 0.016 for AOA). Removing the input
-lowers the errors of separate nets by about 20% (third row against second).
+**Why no `magVinf`.** The low-fidelity coefficients do not depend on
+`magVinf`: the drag polar is for a fixed Re, the VPM is inviscid, and V·dt is
+fixed. Whatever dependence a network learns is fitted noise. Sweeping
+`magVinf` over its range moves the one-net model's CL by 2e-3 and its Cm by
+3e-4 on average, the size of its test errors (against 0.76 and 0.016 for
+AOA). Removing the input lowers the errors of separate nets by about 20%
+(first row against third).
 
 **Bern-IBP.** Over 256 random sub-boxes × 1000 samples, no sampled output
 fell outside its bounds, for every model. Bound width relative to the data
 range of the target, mean over 3 seeds:
 
-| model                              | sub-boxes (≤ ½ side): CL | CD   | Cm   | whole box: CL | CD  | Cm  |
-|------------------------------------|------|------|------|-----|-----|-----|
-| one net for all                    | 0.95 | 1.03 | 1.05 | 6.8 | 8.8 | 7.9 |
-| one net per target                 | 0.42 | 0.34 | 0.55 | 3.3 | 3.4 | 3.7 |
-| CL/CD net + Cm net, no `magVinf`   | 0.49 | 0.52 | 0.56 | 4.0 | 5.1 | 3.7 |
+| model                                        | sub-boxes (≤ ½ side): CL | CD   | Cm   | whole box: CL | CD  | Cm  |
+|----------------------------------------------|------|------|------|-----|-----|-----|
+| CL/CD net + Cm net (the surrogate)           | 0.49 | 0.52 | 0.56 | 4.0 | 5.1 | 3.7 |
+| one net for all, with `magVinf`              | 0.95 | 1.03 | 1.05 | 6.8 | 8.8 | 7.9 |
+| one net per target, with `magVinf`           | 0.42 | 0.34 | 0.55 | 3.3 | 3.4 | 3.7 |
 
 One net for all three targets doubles the bounds without being more
 accurate. Bern-IBP bounds each output separately, and the shared hidden
@@ -352,8 +362,7 @@ boxes but loose on the whole design box, so Phase 2 reachability will need
 input-space splitting (branch and bound) to get useful bounds.
 
 `train_steady.py` trains one net for all targets by default; `--targets`
-trains a net for a subset. The no-`magVinf` rows used the dataset with that
-column removed.
+trains a net for a subset (pipeline step 3).
 
 ## 5. Multi-fidelity surrogate
 
@@ -362,8 +371,8 @@ Running all 500 designs at high fidelity would take about 5–6 weeks (section
 BernMLP (500 designs) plus a BernMLP correction trained on the high-fidelity
 residual y − base(x) (`train_steady.py --base`). Both networks are defined
 on the same input box, so the Bern-IBP bounds of their sum are the sum of
-their bounds (`tests/test_train_steady.py`). The base predicts CL, CD and Cm,
-and the correction covers all three.
+their bounds (`tests/test_train_steady.py`). Each of the two base nets (CL/CD
+and Cm) gets its own correction (pipeline step 3b).
 
 The high-fidelity sweep uses the same LHS (seed 42) as the low-fidelity one,
 so each high-fidelity sample is paired with the low-fidelity sample of the
@@ -406,9 +415,9 @@ pending until enough samples exist.
 ## 6. Limitations
 
 - **The parasitic drag polar is fixed.** It is NACA 0012 at Re = 5e5. The VPM
-  is inviscid, so the low-fidelity coefficients do not depend on `magVinf`
-  (section 4). `magVinf` could be dropped as an input, or the polar made
-  Reynolds-dependent (only a few discrete polars are available).
+  is inviscid, so the coefficients do not depend on `magVinf`, which is
+  therefore not an input (section 4). A Reynolds-dependent polar would make
+  it one again (only a few discrete polars are available).
 - **High-fidelity cost.** The Weber run (tr = 1, about 0.92 M static
   particles, up to 0.21 M wake particles) took 2 h 01 min on 16 threads, about
   36 s per step. The first two sweep samples (tr = 0.64 and 0.98) took 1 h

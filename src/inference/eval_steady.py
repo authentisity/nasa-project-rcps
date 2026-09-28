@@ -14,7 +14,7 @@ are also checked for soundness: on random sub-boxes of the design box, every
 sampled prediction must lie inside the bounds.
 
 Usage:
-    python src/inference/eval_steady.py checkpoints/wing_steady_bern.pt checkpoints/wing_steady_relu.pt \
+    python src/inference/eval_steady.py checkpoints/wing_steady_{clcd,cm,relu}.pt \
         --lstm checkpoints/wing_lstm.pt
 """
 
