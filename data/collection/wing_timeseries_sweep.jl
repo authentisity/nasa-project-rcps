@@ -152,8 +152,8 @@ for idx in my_ids
             push!(rows, csv_row(vcat(base, [k, res.t[k], res.CL[k], res.CD[k], res.Cm[k], 1])))
         end
         global n_success += 1
-        @printf("       logged %d steps in %.0f s  |  final CL=%.4f  CD=%.5f  Cm=%.4f  |  %d blown-up particles removed, peak strength %.2f of bound\n",
-                nrec, wall, res.CL[end], res.CD[end], res.Cm[end], res.n_removed, res.peak_Gamma)
+        @printf("       logged %d steps in %.0f s  |  final CL=%.4f  CD=%.5f  Cm=%.4f  |  removed %d blown-up, %d by size; peak strength %.2f of bound\n",
+                nrec, wall, res.CL[end], res.CD[end], res.Cm[end], res.n_blownup, res.n_sigma, res.peak_Gamma)
     catch e
         e isa InterruptException && rethrow()
         global n_fail += 1

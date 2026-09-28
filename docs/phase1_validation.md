@@ -129,22 +129,36 @@ keyword, so every high-fidelity wing run failed with a `MethodError`.
 the "averaged"/"weighted" Kutta–Joukowski force types; this project uses the
 "regular" one.
 
-**Blown-up particle guard.** Sweep sample 3 (tr = 0.30, Λ = 32.8°,
-Γ = 8.3°, AOA = 7.9°, V = 77.9 m/s) crashed after 3 h 15 min inside FLOWVPM's
-FMM. The error was `ArgumentError: not a bracketing interval` from
-`solve_ρ_over_σ`, the regularization-error autotuning. That root solve has a
-residual of −1 at 0, so it can only fail when a particle's strength is
-non-finite or its core size is ≤ 0. rVPM shrinks the core under stretching,
-so this is a blown-up particle. PROWIM's high-fidelity preset runs without
-wake treatment. Its lower-fidelity presets remove particles whose strength
-exceeds 10× that of a CL = 2 bound vortex shed over one substep, and also
-particles weaker than 10⁻⁴ of it. `run_wing` applies the same upper bound
-after every step (with c_root as the chord), together with σ ≤ 0 or NaN. It
-does not apply the lower bound, so a run that does not blow up is unchanged.
-Over the first 8 steps of sample 3's design, starting vortex included,
-nothing was removed and the strongest particle was 0.10 of the bound. Each
-sample's log line reports the number of particles removed and the peak
-strength kept relative to the bound.
+**Wake treatment.** Sweep sample 3 (tr = 0.30, Λ = 32.8°, Γ = 8.3°,
+AOA = 7.9°, V = 77.9 m/s) crashed after 3 h 15 min inside FLOWVPM's FMM. The
+error was `ArgumentError: not a bracketing interval` from `solve_ρ_over_σ`,
+the regularization-error autotuning. That root solve has a residual of −1 at
+0, so it can only fail when a particle's strength is non-finite or its core
+size is ≤ 0. rVPM shrinks a particle's core under stretching. PROWIM's
+high-fidelity preset runs without wake treatment.
+
+A first fix removed only blown-up particles: strength above 10× that of a
+CL = 2 bound vortex shed over one substep, the upper bound of PROWIM's
+lower-fidelity presets, with c_root as the chord. Sample 3 then removed
+particles at 11 steps between 35 and 84, and crashed within step 85.
+
+A per-step diagnostic of the same design located the problem.
+
+- The smallest core shrank steadily, from 0.68 σ_vpm at step 4 to 0.09 at
+  step 24 and 0.018 at step 32.
+- These particles sat just behind the root trailing edge and carried
+  ~10⁻⁶ of the strength bound.
+- At step 35 particles in the starting vortex, 1.2 m downstream, blew up: one
+  core went negative and a neighbour reached 1.9× the strength bound.
+
+`run_wing` therefore also removes, after every step, particles whose core
+size is outside [0.1, 5] σ_vpm. These are the nearly singular and negligibly
+smeared particles, with the bounds of FLOWUnsteady's Vahana example. The
+strength bound is kept. Over the first 8 steps of sample 3, starting vortex
+included, the strongest particle is 0.10 of it. Each sample's log line
+reports the particles removed for strength and for size, and the peak
+strength kept relative to the bound. Samples 1 and 2 ran before any wake
+treatment.
 
 **Reference quantities (fixed).**
 
