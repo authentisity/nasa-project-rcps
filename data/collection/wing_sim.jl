@@ -11,7 +11,10 @@
 #           lambda = 2.125, 100 elements per semi-span (loads converged to <1%
 #           for n >= 100, Alvarez 2022 dissertation, wing convergence study).
 #   "low"   Settings of FLOWUnsteady's Weber & Brebner wing example (actuator
-#           line model, no SFS model). Only meant for smoke tests.
+#           line model, no SFS model), its validated isolated-wing case.
+#           FLOWUnsteady's docs recommend the actuator line for isolated wings
+#           and the actuator surface for wakes impinging on a wing. Base
+#           training data; the high preset is a correction on top of it.
 #
 # Reference quantities: CL and CD are normalized by the projected planform area
 # S = b (c_root + c_tip) / 2, and Cm by S times the mean aerodynamic chord about
@@ -49,14 +52,14 @@ function fidelity_settings(fidelity, AOA)
     if fidelity == "high"
         return (n = 100, p_per_step = 5, lambda_vpm = 2.125, sigma_vlm_surf_b = 1/200,
                 vlm_rlx = 0.3, shed_starting = AOA < 8, unsteady_shedcrit = 0.001,
-                vortexsheet = true,
+                vortexsheet = true, treat_wake = true,
                 vpm_SFS = vpm.DynamicSFS(vpm.Estr_fmm, vpm.pseudo3level_positive;
                                          alpha=0.999, maxC=1.0,
                                          clippings=[vpm.clipping_backscatter]))
     elseif fidelity == "low"
         return (n = 50, p_per_step = 1, lambda_vpm = 2.0, sigma_vlm_surf_b = 0.05,
                 vlm_rlx = 0.7, shed_starting = true, unsteady_shedcrit = 0.01,
-                vortexsheet = false, vpm_SFS = vpm.SFS_none)
+                vortexsheet = false, treat_wake = false, vpm_SFS = vpm.SFS_none)
     else
         error("Unknown fidelity \"$fidelity\"; expected \"high\" or \"low\"")
     end
@@ -143,7 +146,8 @@ function run_wing(; AOA, ar, tr, lambda, gamma, twist_tip, magVinf,
 
     t_hist, cm_hist = Float64[], Float64[]
 
-    # Wake treatment. PROWIM's high-fidelity preset has none, and a particle
+    # Wake treatment, high fidelity only (the Weber example has none).
+    # PROWIM's high-fidelity preset has none either, and a particle
     # whose strength diverges or whose rVPM core size is driven to <= 0
     # crashes the next FMM call (FLOWVPM's regularization autotuning cannot
     # bracket its root). In sweep sample 3 the smallest core shrank steadily
@@ -182,7 +186,7 @@ function run_wing(; AOA, ar, tr, lambda, gamma, twist_tip, magVinf,
     # force acts at the midpoint of the element's lifting bound vortex A-B
     function monitor(sim, PFIELD, T, DT; optargs...)
         ret = wing_monitor(sim, PFIELD, T, DT; optargs...)
-        treat_wake(PFIELD)
+        fs.treat_wake && treat_wake(PFIELD)
         if PFIELD.nt > 2
             M = zeros(3)
             for (i, F) in enumerate(wing.sol["Ftot"])

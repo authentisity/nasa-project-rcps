@@ -89,7 +89,7 @@ the data).
 FLOWUnsteady 3.4 (master), FLOWVLM 2.1.4 and FLOWVPM 4.0.3, as pinned in
 `data/collection/Manifest.toml`.
 
-**High-fidelity preset** (used by the sweep), following FLOWUnsteady's
+**High-fidelity preset** (data for the multi-fidelity correction), following FLOWUnsteady's
 high-fidelity PROWIM example. That example replicates Alvarez & Ning (2023,
 J. Aircraft, doi:10.2514/1.C037279), whose wing is untapered and unswept,
 with two propellers. The rVPM formulation and its SFS model come from
@@ -102,8 +102,17 @@ Alvarez & Ning (2023, AIAA J., doi:10.2514/1.J063045).
   loads converge to within 1% from n ≈ 100
 - the wake is simulated until it is 2.75 spans long, in 200 steps
 
-The low-fidelity preset is the Weber wing example (actuator line, no SFS) and
-is only meant for smoke tests.
+**Low-fidelity preset** (the base training data): the settings of
+FLOWUnsteady's Weber wing example, its validated isolated-wing case. It uses
+the actuator line model, no SFS model, 50 elements per semi-span, 1 shed per
+step, λ = 2.0 and no wake treatment. FLOWUnsteady's documentation calls the
+actuator line "very accurate for isolated wings" and reserves the actuator
+surface for wakes impinging on a wing, such as PROWIM's propeller wakes. The
+two presets differ by about 1% in CL on the paired sweep designs (section 5).
+The high preset costs 1.5–3.5 h per design, and in the tapered, swept part of
+the design space it needs a wake treatment to run at all. The surrogate is
+therefore built on 500 low-fidelity designs and corrected with high-fidelity
+ones.
 
 **Particle budget.** The vortex sheet adds static particles to the particle
 field for the duration of every step. There are about 2.125·c/σ_TBV per
@@ -207,16 +216,22 @@ itself. The spread widens with twist because the θ_eff model is crude.
 The experiment is ARC R&M 2882, the same case as FLOWUnsteady's own
 validation: A = 5, untapered, 45° sweep, RAE 101 section.
 
-High-fidelity preset at AOA = 4.2°, V = 49.7 m/s, ρ = 0.93 kg/m³, RAE 101
-polar, no skin friction (as in FLOWUnsteady's example), 200 steps:
+Both presets at AOA = 4.2°, V = 49.7 m/s, ρ = 0.93 kg/m³, RAE 101 polar, no
+skin friction (as in FLOWUnsteady's example), 200 steps:
 
-| quantity | VPM (high) | experiment | error |
-|----------|------------|------------|-------|
-| CL       | 0.2325     | 0.238      | −2.3% |
-| CD       | 0.00478    | 0.005      | −4.4% |
-| Cm (MAC c/4, nose-up +) | +0.018 | n/a | |
+| quantity | VPM (low) | VPM (high) | experiment | error low | error high |
+|----------|-----------|------------|------------|-----------|------------|
+| CL       | 0.2356    | 0.2325     | 0.238      | −1.0%     | −2.3%      |
+| CD       | 0.00473   | 0.00478    | 0.005      | −5.3%     | −4.4%      |
+| Cm (MAC c/4, nose-up +) | +0.018 | +0.018 | n/a | | |
+| wall time, 16 threads | 3.7 min | 2 h 01 min | | | |
 
-The transient is converged: over the last 10% of the steps, the CL standard
+FLOWUnsteady's documentation reports CL 0.23506 and CD 0.00501 for its
+example with the low-preset settings. The low preset reproduces that CL to
+0.2%. The 6% difference in CD (3e-4) was not traced; the high preset gives a
+similar CD.
+
+The high-preset transient is converged: over the last 10% of the steps, the CL standard
 deviation is below 1e-4 and CL drifts by 1e-4 from the preceding 10%. If the
 run stops when the wake is 2.0 spans long instead of 2.75, CL is 0.2320
 (−0.2%).

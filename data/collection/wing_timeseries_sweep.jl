@@ -21,8 +21,8 @@
 # ... and writes its own CSV. Concatenate the shard files after all finish.
 #   SHARD=2 NSHARDS=4 julia -t 4 --project=. wing_timeseries_sweep.jl
 #
-# FIDELITY=low selects the cheap preset (smoke tests only); NSTEPS overrides
-# the number of time steps.
+# FIDELITY=low selects the Weber-example preset (base training data); NSTEPS
+# overrides the number of time steps.
 
 using Random
 using Printf
