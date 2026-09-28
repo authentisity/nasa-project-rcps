@@ -23,10 +23,12 @@ defined only on that box, so the box is also the domain for reachability.
 ## Pipeline
 
 ```bash
-# 1. Simulate (data/collection, Julia 1.10); resumable, shardable
-cd data/collection && julia -t 16 --project=. wing_timeseries_sweep.jl
+# 1. Simulate (data/collection, Julia 1.10); resumable, shardable. Low fidelity
+#    is the base data (4 shards of 4 threads); FIDELITY=high the correction data
+cd data/collection && for k in 1 2 3 4; do
+    FIDELITY=low SHARD=$k NSHARDS=4 julia -t 4 --project=. wing_timeseries_sweep.jl & done
 # 2. Steady-state + time-series datasets, shared train/val/test split
-python src/datasets/preprocess.py --input data/raw/wing_timeseries_data*.csv
+python src/datasets/preprocess.py --input data/raw/wing_timeseries_data_low_*.csv
 # 3. Surrogate (BernMLP) and baselines
 python src/training/train_steady.py                      # -> checkpoints/wing_steady_bern.pt
 python src/training/train_steady.py --arch relu --output checkpoints/wing_steady_relu.pt
@@ -295,8 +297,11 @@ Running all 500 designs at high fidelity would take about 5–6 weeks (section
   (`train_steady.py --base`). Both networks are defined on the same input
   box, so the Bern-IBP bounds of their sum are the sum of their bounds
   (`tests/test_train_steady.py`).
-- **Cm:** a separate BernMLP trained on the high-fidelity data only
-  (`--targets Cm`), since the low-fidelity data has no valid Cm.
+- **Cm:** the legacy low-fidelity data has no valid Cm, so Cm was planned
+  as a separate BernMLP trained on the high-fidelity data only
+  (`--targets Cm`). The low-fidelity sweep is being re-run with the current
+  script, which records Cm, so the base model will predict Cm too. Whether
+  the correction also covers Cm will be decided on real high-fidelity pairs.
 
 The high-fidelity sweep uses the same LHS (seed 42) as the low-fidelity one,
 so each high-fidelity sample is paired with the low-fidelity sample of the
@@ -352,5 +357,5 @@ pending until enough samples exist.
   whole transient. Only this untapered wing has been compared.
 - **No stall.** CL comes from the lattice, so it stays linear up to 12°. The
   polar only adds parasitic drag.
-- **Legacy low-fidelity data has no valid Cm.** Cm is only available from the
-  high-fidelity sweep.
+- **Legacy low-fidelity data has no valid Cm.** The re-run low-fidelity sweep
+  records Cm (section 5).
