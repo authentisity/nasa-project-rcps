@@ -202,7 +202,11 @@ of the low-fidelity ones (Cm within 4e-5). Sample 100 needed the guard most.
 It switched off 21 particles between steps 57 and 166, all in the starting
 vortex 3.1–7.7 m downstream (the wing ends at x ≤ 1.4 m), and the treatment
 removed 5 for strength and 984 for size. Its steady CL and CD are within 0.1%
-of the low-fidelity values and Cm within 3e-4.
+of the low-fidelity values and Cm within 3e-4. Sample 174 (AOA = 10.9°, so no
+starting vortex) was run through `wing_timeseries_sweep.jl` itself, as on the
+server. Nothing was switched off or removed for strength, 73 particles were
+removed for size, and the steady values are within 0.7% of the low-fidelity
+ones (Cm within 1e-4).
 
 **Reference quantities (fixed).**
 
@@ -427,6 +431,7 @@ box.
 | 2 | 1.2°, 7.2, 0.98, 3°, +2.7° | 0.1811 | 0.1836 | −1.4% | 0.00968 | 0.00969 | −0.1% | +0.0000 | +0.0000 |
 | 3 | 7.9°, 5.2, 0.30, 33°, −0.2° | 0.3933 | 0.3930 | +0.1% | 0.02988 | 0.02987 | +0.0% | −0.0031 | −0.0031 |
 | 100 | 8.0°, 6.7, 0.37, 38°, +2.7° | 0.5074 | 0.5082 | −0.1% | 0.03158 | 0.03161 | −0.1% | −0.0119 | −0.0122 |
+| 174 | 10.9°, 8.1, 0.35, 46°, +0.6° | 0.6475 | 0.6473 | +0.0% | 0.04125 | 0.04095 | +0.7% | −0.0290 | −0.0289 |
 
 The two fidelities agree in Cm to within 4e-4 here.
 
@@ -449,7 +454,7 @@ Learning Cm from scratch inside the correction network was worse on the
 validation designs (Cm R² 0.93 against 0.98–0.99): early stopping on the
 small, quickly fit CL/CD correction stops training before Cm is fit. With a
 low-fidelity Cm in the base, the Cm correction is small too (under 4e-4 on
-the first four pairs). The real comparison on high-fidelity test designs is
+the first five pairs). The real comparison on high-fidelity test designs is
 pending until enough samples exist.
 
 ## 6. Limitations
@@ -463,8 +468,9 @@ pending until enough samples exist.
   36 s per step. The first two sweep samples (tr = 0.64 and 0.98) took 1 h
   45 min and 1 h 37 min. At about 13 samples a day, 500 would take 5–6 weeks
   on one machine; tapered wings, with up to 1.9× the static particles, are
-  slower. Samples 3 and 100 (tr = 0.30 and 0.37) took 7.1 h and 5.9 h on 8
-  threads, sharing the 8-core machine with a second run. Most of the cost is the static particles. Rerunning the Weber case with only the
+  slower. Samples 3, 100 and 174 (tr = 0.30, 0.37 and 0.35) took 7.1 h,
+  5.9 h and 5.1 h on 8 threads, each sharing the 8-core machine with a second
+  run. Most of the cost is the static particles. Rerunning the Weber case with only the
   vortex-sheet overlap reduced to 2.125/10 (PROWIM's mid-fidelity value, so
   10× fewer static particles) took 34 min, 3.5× faster. CL was 0.2323 against
   0.2325, CD and Cm were unchanged, and CL differed by at most 4e-4 over the
