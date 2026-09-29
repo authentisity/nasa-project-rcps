@@ -27,8 +27,13 @@ It is not an input, because the coefficients do not depend on it (section 4).
 # 1. Simulate (data/collection, Julia 1.10); resumable, shardable. Low fidelity
 #    is the base data (4 shards of 4 threads); FIDELITY=high the correction data.
 #    --gcthreads=1 avoids segfaults in Julia 1.10.2's parallel garbage collector
-cd data/collection && for k in 1 2 3 4; do
+cd data/collection && julia --project=. -e 'using Pkg; Pkg.instantiate()'  # once
+for k in 1 2 3 4; do
     FIDELITY=low SHARD=$k NSHARDS=4 julia -t 4 --gcthreads=1 --project=. wing_timeseries_sweep.jl & done
+#    High fidelity: hours per design and up to 8 GB per process (section 6)
+for k in 1 2 3 4; do
+    FIDELITY=high SHARD=$k NSHARDS=4 julia -t 16 --gcthreads=1 --project=. wing_timeseries_sweep.jl \
+        > sweep_high_$k.log 2>&1 & done
 # 2. Steady-state + time-series datasets, shared train/val/test split
 python src/datasets/preprocess.py --input data/raw/wing_timeseries_data_low_*.csv
 # 3. Surrogate: a BernMLP for CL/CD and one for Cm (section 4), and baselines
@@ -113,8 +118,8 @@ the actuator line model, no SFS model, 50 elements per semi-span, 1 shed per
 step, λ = 2.0 and no wake treatment. FLOWUnsteady's documentation calls the
 actuator line "very accurate for isolated wings" and reserves the actuator
 surface for wakes impinging on a wing, such as PROWIM's propeller wakes. The
-two presets differ by about 1% in CL on the paired sweep designs (section 5).
-The high preset costs 1.5–3.5 h per design, and in the tapered, swept part of
+two presets differ by up to 1.4% in CL on the paired sweep designs (section 5).
+The high preset costs 1.5–7 h per design, and in the tapered, swept part of
 the design space it needs a wake treatment to run at all. The surrogate is
 therefore built on 500 low-fidelity designs and corrected with high-fidelity
 ones.
@@ -169,10 +174,35 @@ A per-step diagnostic of the same design located the problem.
 size is outside [0.1, 5] σ_vpm. These are the nearly singular and negligibly
 smeared particles, with the bounds of FLOWUnsteady's Vahana example. The
 strength bound is kept. Over the first 8 steps of sample 3, starting vortex
-included, the strongest particle is 0.10 of it. Each sample's log line
-reports the particles removed for strength and for size, and the peak
-strength kept relative to the bound. Samples 1 and 2 ran before any wake
-treatment.
+included, the strongest particle is 0.10 of it.
+
+Sample 3 still crashed with this treatment, after 2 h 05 min and with the same
+error, now raised within a step. RK3 integrates the rVPM core size
+(dσ/dt = −σZ, with Z the stretching rate) explicitly. Where Z exceeds about
+2.5/dt, one substep takes σ through zero before the post-step treatment can
+see it. In sample 100 (tr = 0.37, Λ = 38°, AOA = 8.0°), one core in the
+starting vortex went from above 0.05 σ_vpm to −0.11 σ_vpm between two RK3
+substeps of step 57. `run_wing` therefore checks the particles before every
+evaluation of the particle field. A particle with a core size ≤ 0 or a
+non-finite strength gets zero strength and a core size below the lower
+bound, and the treatment removes it after the step.
+
+Each sample's log line reports the particles removed for strength and for
+size (and how many of the latter were caught within a step), and the peak
+strength kept relative to the bound. The treatment only acts by removing
+particles, so a design where it removes none runs exactly as without it.
+Sample 2 removed none over 200 steps (peak strength 0.04 of the bound), and
+its first 38 steps match the untreated run to 3e-6 in CL.
+
+With the guard, sample 3 ran to completion (7.1 h on 8 threads). The guard
+switched off 3 starting-vortex particles at step 186, 8 m downstream, and the
+treatment removed 4 particles for strength and 1295 of its 1.9 M for size.
+CL and CD show no jump at these steps, and the steady values are within 0.1%
+of the low-fidelity ones (Cm within 4e-5). Sample 100 needed the guard most.
+It switched off 21 particles between steps 57 and 166, all in the starting
+vortex 3.1–7.7 m downstream (the wing ends at x ≤ 1.4 m), and the treatment
+removed 5 for strength and 984 for size. Its steady CL and CD are within 0.1%
+of the low-fidelity values and Cm within 3e-4.
 
 **Reference quantities (fixed).**
 
@@ -345,6 +375,14 @@ fixed. Whatever dependence a network learns is fitted noise. Sweeping
 AOA). Removing the input lowers the errors of separate nets by about 20%
 (first row against third).
 
+The high-fidelity preset is nearly V-independent as well. Sample 2 was run
+at 20, 58.6 (its own) and 80 m/s over the first 38 steps. The largest
+differences over the transient were 7.5e-5 in CL, 7.4e-6 in CD and 4.4e-6 in
+Cm, growing toward low V, which suggests an absolute tolerance in the solver.
+A full run at 80 m/s gives steady values within 8e-6 of the 58.6 m/s run.
+Even the largest transient difference is 13× below the surrogate's CL MAE
+(9.8e-4).
+
 **Bern-IBP.** Over 256 random sub-boxes × 1000 samples, no sampled output
 fell outside its bounds, for every model. Bound width relative to the data
 range of the target, mean over 3 seeds:
@@ -387,8 +425,10 @@ box.
 |----|------|-------|-------|-----|-------|-------|-----|-------|-------|
 | 1 | 5.6°, 8.0, 0.64, 23°, −2.8° | 0.3410 | 0.3433 | −0.7% | 0.01435 | 0.01429 | +0.4% | +0.0181 | +0.0181 |
 | 2 | 1.2°, 7.2, 0.98, 3°, +2.7° | 0.1811 | 0.1836 | −1.4% | 0.00968 | 0.00969 | −0.1% | +0.0000 | +0.0000 |
+| 3 | 7.9°, 5.2, 0.30, 33°, −0.2° | 0.3933 | 0.3930 | +0.1% | 0.02988 | 0.02987 | +0.0% | −0.0031 | −0.0031 |
+| 100 | 8.0°, 6.7, 0.37, 38°, +2.7° | 0.5074 | 0.5082 | −0.1% | 0.03158 | 0.03161 | −0.1% | −0.0119 | −0.0122 |
 
-The two fidelities agree in Cm to within 1e-4 here.
+The two fidelities agree in Cm to within 4e-4 here.
 
 **Synthetic check of the training setup.** To exercise the pipeline before
 enough high-fidelity data exists, a stand-in was built from the first 100
@@ -408,8 +448,8 @@ model. This check predates the low-fidelity Cm, so Cm got its own model.
 Learning Cm from scratch inside the correction network was worse on the
 validation designs (Cm R² 0.93 against 0.98–0.99): early stopping on the
 small, quickly fit CL/CD correction stops training before Cm is fit. With a
-low-fidelity Cm in the base, the Cm correction is small too (under 1e-4 on
-the first two pairs). The real comparison on high-fidelity test designs is
+low-fidelity Cm in the base, the Cm correction is small too (under 4e-4 on
+the first four pairs). The real comparison on high-fidelity test designs is
 pending until enough samples exist.
 
 ## 6. Limitations
@@ -423,7 +463,8 @@ pending until enough samples exist.
   36 s per step. The first two sweep samples (tr = 0.64 and 0.98) took 1 h
   45 min and 1 h 37 min. At about 13 samples a day, 500 would take 5–6 weeks
   on one machine; tapered wings, with up to 1.9× the static particles, are
-  slower. Most of the cost is the static particles. Rerunning the Weber case with only the
+  slower. Samples 3 and 100 (tr = 0.30 and 0.37) took 7.1 h and 5.9 h on 8
+  threads, sharing the 8-core machine with a second run. Most of the cost is the static particles. Rerunning the Weber case with only the
   vortex-sheet overlap reduced to 2.125/10 (PROWIM's mid-fidelity value, so
   10× fewer static particles) took 34 min, 3.5× faster. CL was 0.2323 against
   0.2325, CD and Cm were unchanged, and CL differed by at most 4e-4 over the

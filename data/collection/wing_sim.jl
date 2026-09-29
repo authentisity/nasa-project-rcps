@@ -69,10 +69,11 @@ end
     run_wing(; AOA, ar, tr, lambda, gamma, twist_tip, magVinf, ...)
 
 Simulate an isolated simpleWing from rest until its wake is `wake_factor` spans
-long. Returns `(; t, CL, CD, Cm, planform, n_blownup, n_sigma, peak_Gamma)`
+long. Returns `(; t, CL, CD, Cm, planform, n_blownup, n_sigma, n_guarded, peak_Gamma)`
 where the arrays hold one value per time step (steps 3..nsteps, as logged by
 FLOWUnsteady's wing monitor), `n_blownup` and `n_sigma` count the particles the
-wake treatment removed for their strength and core size, and `peak_Gamma` is
+wake treatment removed for their strength and core size, `n_guarded` those of
+them switched off within a step (also counted in `n_sigma`), and `peak_Gamma` is
 the largest kept particle strength over the strength bound.
 """
 function run_wing(; AOA, ar, tr, lambda, gamma, twist_tip, magVinf,
@@ -182,6 +183,27 @@ function run_wing(; AOA, ar, tr, lambda, gamma, twist_tip, magVinf,
         n_blownup[] += n
     end
 
+    # The treatment alone did not stop sample 3 crashing: a core size can also
+    # go through zero within a step. RK3 integrates the rVPM core size
+    # (dsigma/dt = -sigma*Z) explicitly and overshoots where the stretching
+    # rate Z exceeds ~2.5/dt; in sample 100 one starting-vortex core went from
+    # >= 0.05 to -0.11 sigma_vpm in one substep. Before every evaluation of the
+    # particle field, such particles are switched off (zero strength, core size
+    # below sigma_min) and the treatment removes them after the step.
+    n_guarded = Ref(0)
+    function UJ_guarded(PFIELD; optargs...)
+        for i in 1:vpm.get_np(PFIELD)
+            sigma, G = vpm.get_sigma(PFIELD, i), vpm.get_Gamma(PFIELD, i)
+            if !(0 < sigma[] < Inf) || !all(isfinite, G)
+                G .= 0
+                view(PFIELD.particles, vpm.M_INDEX[[4, 5, 6, 8]], i) .= 0   # RK3 storage of G and sigma
+                sigma[] = sigma_min / 2
+                n_guarded[] += 1
+            end
+        end
+        return vpm.UJ_fmm(PFIELD; optargs...)
+    end
+
     # The wing monitor stores each element's force in wing.sol["Ftot"]; the
     # force acts at the midpoint of the element's lifting bound vortex A-B
     function monitor(sim, PFIELD, T, DT; optargs...)
@@ -207,6 +229,7 @@ function run_wing(; AOA, ar, tr, lambda, gamma, twist_tip, magVinf,
                        max_particles=max_particles,
                        max_static_particles=max_static_particles,
                        vpm_integration=vpm.rungekutta3,
+                       vpm_UJ=fs.treat_wake ? UJ_guarded : vpm.UJ_fmm,
                        vpm_SFS=fs.vpm_SFS,
                        sigma_vlm_solver=-1,
                        sigma_vlm_surf=sigma_vlm_surf,
@@ -226,5 +249,6 @@ function run_wing(; AOA, ar, tr, lambda, gamma, twist_tip, magVinf,
                        verbose_nsteps=verbose_nsteps)
 
     return (; t=t_hist, CL=copy(cl_out), CD=copy(cd_out), Cm=cm_hist, planform=pf,
-              n_blownup=n_blownup[], n_sigma=n_sigma[], peak_Gamma=peak_Gamma[] / Gamma_max)
+              n_blownup=n_blownup[], n_sigma=n_sigma[], n_guarded=n_guarded[],
+              peak_Gamma=peak_Gamma[] / Gamma_max)
 end
