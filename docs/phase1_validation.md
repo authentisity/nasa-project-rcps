@@ -118,7 +118,7 @@ the actuator line model, no SFS model, 50 elements per semi-span, 1 shed per
 step, λ = 2.0 and no wake treatment. FLOWUnsteady's documentation calls the
 actuator line "very accurate for isolated wings" and reserves the actuator
 surface for wakes impinging on a wing, such as PROWIM's propeller wakes. The
-two presets differ by up to 1.4% in CL on the paired sweep designs (section 5).
+two presets differ by up to 1.8% in CL on the paired sweep designs (section 5).
 The high preset costs 1.5–7 h per design, and in the tapered, swept part of
 the design space it needs a wake treatment to run at all. The surrogate is
 therefore built on 500 low-fidelity designs and corrected with high-fidelity
@@ -206,7 +206,10 @@ of the low-fidelity values and Cm within 3e-4. Sample 174 (AOA = 10.9°, so no
 starting vortex) was run through `wing_timeseries_sweep.jl` itself, as on the
 server. Nothing was switched off or removed for strength, 73 particles were
 removed for size, and the steady values are within 0.7% of the low-fidelity
-ones (Cm within 1e-4).
+ones (Cm within 1e-4). Sample 63 (ar = 3.5, the largest chords so far)
+switched off 5 particles between steps 21 and 72, 0.5–2.1 m behind the root
+trailing edge, and removed 3 for strength and 1651 for size. Its steady CL
+and CD are 1.8% and 1.1% above the low-fidelity values, and Cm is within 3e-5.
 
 **Reference quantities (fixed).**
 
@@ -430,6 +433,7 @@ box.
 | 1 | 5.6°, 8.0, 0.64, 23°, −2.8° | 0.3410 | 0.3433 | −0.7% | 0.01435 | 0.01429 | +0.4% | +0.0181 | +0.0181 |
 | 2 | 1.2°, 7.2, 0.98, 3°, +2.7° | 0.1811 | 0.1836 | −1.4% | 0.00968 | 0.00969 | −0.1% | +0.0000 | +0.0000 |
 | 3 | 7.9°, 5.2, 0.30, 33°, −0.2° | 0.3933 | 0.3930 | +0.1% | 0.02988 | 0.02987 | +0.0% | −0.0031 | −0.0031 |
+| 63 | 7.3°, 3.5, 0.34, 6°, −4.8° | 0.2455 | 0.2412 | +1.8% | 0.02307 | 0.02282 | +1.1% | −0.0005 | −0.0005 |
 | 100 | 8.0°, 6.7, 0.37, 38°, +2.7° | 0.5074 | 0.5082 | −0.1% | 0.03158 | 0.03161 | −0.1% | −0.0119 | −0.0122 |
 | 174 | 10.9°, 8.1, 0.35, 46°, +0.6° | 0.6475 | 0.6473 | +0.0% | 0.04125 | 0.04095 | +0.7% | −0.0290 | −0.0289 |
 
@@ -454,7 +458,7 @@ Learning Cm from scratch inside the correction network was worse on the
 validation designs (Cm R² 0.93 against 0.98–0.99): early stopping on the
 small, quickly fit CL/CD correction stops training before Cm is fit. With a
 low-fidelity Cm in the base, the Cm correction is small too (under 4e-4 on
-the first five pairs). The real comparison on high-fidelity test designs is
+the first six pairs). The real comparison on high-fidelity test designs is
 pending until enough samples exist.
 
 ## 6. Limitations
@@ -468,9 +472,9 @@ pending until enough samples exist.
   36 s per step. The first two sweep samples (tr = 0.64 and 0.98) took 1 h
   45 min and 1 h 37 min. At about 13 samples a day, 500 would take 5–6 weeks
   on one machine; tapered wings, with up to 1.9× the static particles, are
-  slower. Samples 3, 100 and 174 (tr = 0.30, 0.37 and 0.35) took 7.1 h,
-  5.9 h and 5.1 h on 8 threads, each sharing the 8-core machine with a second
-  run. Most of the cost is the static particles. Rerunning the Weber case with only the
+  slower. Samples 3, 63, 100 and 174 (tr = 0.30, 0.34, 0.37 and 0.35) took
+  7.1 h, 5.7 h, 5.9 h and 5.1 h on 8 threads, mostly sharing the 8-core
+  machine with a second run. Most of the cost is the static particles. Rerunning the Weber case with only the
   vortex-sheet overlap reduced to 2.125/10 (PROWIM's mid-fidelity value, so
   10× fewer static particles) took 34 min, 3.5× faster. CL was 0.2323 against
   0.2325, CD and Cm were unchanged, and CL differed by at most 4e-4 over the
